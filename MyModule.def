@@ -1,0 +1,8 @@
+LIBRARY MyModule
+EXPORTS
+    HsStart
+    HsEnd
+    startCtx
+    freeCtx
+    main2
+    controlInMeta

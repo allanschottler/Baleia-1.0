@@ -1,0 +1,40 @@
+cabal-version: 3.4
+name:     Baleia
+version: 1.0
+
+foreign-library Baleia
+  type:                
+    native-shared
+  ghc-options:
+    -O2
+    -fPIC
+  if os(windows) {
+    options: standalone
+    mod-def-file: MyModule.def  
+  }
+  other-extensions:
+    TemplateHaskell,
+    MagicHash
+  install-includes:    
+    Start_stub.h 
+  other-modules:
+    Baleia,
+    Baleia.Math,
+    Baleia.Meta,
+    Baleia.Sample,
+    Baleia.Time,
+    Start,
+    MyModule
+  build-depends:
+    base >= 4.15 && <= 5, 
+    syb, 
+    template-haskell,
+    split,
+    storablevector,
+    storable-tuple
+  hs-source-dirs:      
+    src
+  c-sources:           
+    csrc/StartEnd.c
+  default-language:    
+    Haskell2010

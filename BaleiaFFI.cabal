@@ -13,25 +13,27 @@ foreign-library Baleia
     mod-def-file: MyModule.def  
   }
   other-extensions:
-    TemplateHaskell,
-    MagicHash
+    TemplateHaskell
   install-includes:    
     Start_stub.h 
   other-modules:
     Baleia,
     Baleia.Math,
     Baleia.Meta,
+    Baleia.DSP,
     Baleia.Sample,
     Baleia.Time,
     Start,
-    MyModule
+    Control
   build-depends:
     base >= 4.15 && <= 5, 
     syb, 
     template-haskell,
-    split,
+    hint,
     storablevector,
-    storable-tuple
+    storable-tuple,
+    split,
+    directory
   hs-source-dirs:      
     src
   c-sources:           

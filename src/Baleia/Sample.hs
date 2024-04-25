@@ -21,7 +21,7 @@ import Foreign.Ptr
 data Sample = Silence 
             | Mono Float 
             | Stereo Float Float 
-            deriving (Show)
+            deriving (Show, Eq)
 
 --type Sample = Sample' Float
 

@@ -2,7 +2,7 @@ module Baleia
   ( --module Baleia.Internal
   --, module Baleia.Signal
    module Baleia.Sample
-  --, module Baleia.DSP
+  -- , module Baleia.DSP
   --, module Baleia.Oscillator
   --, module Baleia.Noise
   --, module Baleia.Note
@@ -14,7 +14,7 @@ module Baleia
 --import Baleia.Internal
 --import Baleia.Signal
 import Baleia.Sample
---import Baleia.DSP
+-- import Baleia.DSP
 --import Baleia.Oscillator
 --import Baleia.Noise
 --import Baleia.Time

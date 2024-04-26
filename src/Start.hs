@@ -28,27 +28,26 @@ import Control
 | META
 ---------------------------------------------------------------------}
 
-pairEvery :: [a] -> [(a,a)]
-pairEvery (x:y:xs) = [(x,y)] ++ pairEvery xs
-pairEvery [] = []
+pairEvery' :: [String] -> V.Vector (CString, CString)
+pairEvery' (x:y:xs) = unsafePerformIO $ do
+    cx <- newCString x
+    cy <- newCString y
+    return $ V.cons (cx,cy) $ pairEvery' xs
+pairEvery' [] = V.empty
 
-controlInFields' = $(introspect ''Control)
-controlInFields = pairEvery $ split (dropBlanks . dropDelims $ oneOf "()[],\"") controlInFields' 
-controlInMeta = newCString controlInFields'
+ctrlFields' = $(introspect ''Control)
+ctrlFields = pairEvery' $ split (dropBlanks . dropDelims $ oneOf "()[],\"") ctrlFields' 
 
--- | Auxiliary function
-floatToBool :: Float -> Bool
-floatToBool f = f >= 0.5
+foreign export ccall controlInMeta :: IO(CString)
+controlInMeta = newCString ctrlFields'
 
-floatToIntList :: Int -> Float -> Int
-floatToIntList n f = Prelude.floor (f * (fromIntegral n))
-
-raw2ctrl :: [(String, String)] -> [Float] -> Control
-raw2ctrl fields values = r
-    where zs = zip fields values
-          r = foldr f initControl zs
-          f ((n,t),v) s | t == "Bool" = setField n (floatToBool v) s
-                        | otherwise = setField n v s
+raw2ctrl' :: V.Vector (CString, CString) -> V.Vector Float -> Control
+raw2ctrl' fields values = r
+    where zs = V.zipWith (,) fields values
+          r = V.foldr f initControl zs
+          cs2s = unsafePerformIO . peekCString
+          f ((n,t),v) s | (cs2s t) == "Bool" = setField (cs2s n) (v >= 0.5) s
+                        | otherwise = setField (cs2s n) v s
 
 poke2 :: (Storable a) => Ptr a -> Ptr a -> V.Vector (a, a) -> IO ()
 poke2 ptra ptrb v = go v 0
@@ -64,18 +63,18 @@ poke2 ptra ptrb v = go v 0
 ---------------------------------------------------------------------}
 
 process :: Control -> V.Vector Sample -> V.Vector Sample
-process ctrl i = clip 0.5 i
+process ctrl i = amp 2 i
 
 {---------------------------------------------------------------------
 | CTX
 ---------------------------------------------------------------------}
 
-type Context = IORef(Control -> V.Vector Sample -> V.Vector Sample)
+type Context = (Control -> V.Vector Sample -> V.Vector Sample)
 
-startCtx :: IO(StablePtr Context)
-startCtx = do newStablePtr =<< newIORef process
+foreign export ccall startCtx :: IO(StablePtr Context)
+startCtx = newStablePtr process
 
-freeCtx :: StablePtr Context -> IO()
+foreign export ccall freeCtx :: StablePtr Context -> IO()
 freeCtx = freeStablePtr
 
 {---------------------------------------------------------------------
@@ -84,17 +83,12 @@ freeCtx = freeStablePtr
  | Responsible for marshaling types and converting ptrs into vectors.
 ---------------------------------------------------------------------}
 
-main2 :: StablePtr Context -> Int -> Int -> Ptr Float -> Ptr Float -> Ptr Float -> Ptr Float -> Ptr Float -> Ptr Float -> IO()
+foreign export ccall main2 :: StablePtr Context -> Int -> Int -> Ptr Float -> Ptr Float -> Ptr Float -> Ptr Float -> Ptr Float -> Ptr Float -> IO()
 main2 pf ns np ci co il ir ol or = do
-    f <- readIORef =<< deRefStablePtr pf
+    f <- deRefStablePtr pf
     ilv <- V.peek ns il
     irv <- V.peek ns ir
-    cip <- peekArray np ci
-    let ctrl = raw2ctrl controlInFields cip
+    cip <- V.peek np ci
+    let ctrl = raw2ctrl' ctrlFields cip
     let out = f ctrl $ V.zipWith Stereo ilv irv
     poke2 ol or $ V.map stereoToFloat out
-
-foreign export ccall controlInMeta :: IO(CString)
-foreign export ccall startCtx :: IO(StablePtr Context)
-foreign export ccall freeCtx :: StablePtr Context -> IO()
-foreign export ccall main2 :: StablePtr Context -> Int -> Int -> Ptr Float -> Ptr Float -> Ptr Float -> Ptr Float -> Ptr Float -> Ptr Float -> IO()

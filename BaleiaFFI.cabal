@@ -1,34 +1,34 @@
-cabal-version: 3.4
+cabal-version: 3.12
 name:     Baleia
 version: 1.0
 
-executable BaleiaTest
-  main-is:             Main.hs
-  hs-source-dirs:      
-    test,
-    src
-  ghc-options:         -O2
-  build-depends:       
-    base >= 4.15 && <= 5,
-    HUnit,
-    syb, 
-    template-haskell,
-    hint,
-    vector,
-    storablevector,
-    storable-tuple,
-    split,
-    directory
-  other-modules:
-    Baleia,
-    Baleia.Math,
-    Baleia.Meta,
-    Baleia.DSP,
-    Baleia.Sample,
-    Baleia.Time,
-    Start,
-    Control
-  default-language:    Haskell2010
+-- executable BaleiaTest
+--   main-is:             Main.hs
+--   hs-source-dirs:      
+--     test,
+--     src
+--   ghc-options:         -O2
+--   build-depends:       
+--     base >= 4.15 && <= 5,
+--     HUnit,
+--     syb, 
+--     template-haskell,
+--     hint,
+--     vector,
+--     storablevector,
+--     storable-tuple,
+--     split,
+--     directory
+--   other-modules:
+--     Baleia,
+--     Baleia.Math,
+--     Baleia.Meta,
+--     Baleia.DSP,
+--     Baleia.Sample,
+--     Baleia.Time,
+--     Start,
+--     Control
+--   default-language:    Haskell2010
 
 foreign-library Baleia
   type:                
@@ -39,8 +39,10 @@ foreign-library Baleia
     -fPIC
   if os(windows) {
     options: standalone
-    mod-def-file: MyModule.def  
+    mod-def-file: Baleia.def  
   }
+  extra-libraries-static: 
+    HSrts
   other-extensions:
     TemplateHaskell
   install-includes:    

@@ -10,6 +10,7 @@ import Foreign.Storable.Tuple
 
 import Data.IORef
 import Data.List.Split
+-- import qualified Data.StorableVector as V
 import qualified Data.StorableVector as V
 
 import Language.Haskell.TH
@@ -22,6 +23,7 @@ import Baleia
 import Baleia.Meta
 import Baleia.Sample
 import Baleia.DSP
+import Baleia.Time
 import Control
 
 {---------------------------------------------------------------------
@@ -62,17 +64,52 @@ poke2 ptra ptrb v = go v 0
 | CUSTOM
 ---------------------------------------------------------------------}
 
-process :: Control -> V.Vector Sample -> V.Vector Sample
-process ctrl i = amp 2 i
+delay2 :: Int -> IO (V.Vector Sample -> IO(V.Vector Sample))
+delay2 n = do
+    r <- newIORef (V.replicate n 0)
+    pure $ \v -> atomicModifyIORef r $ \v_delayed ->
+        let (v1, v2) = V.splitAt (V.length v - n) v
+            (v3, v4) = V.splitAt (V.length v) v_delayed
+        in if V.length v >= n then (v2,  V.append v_delayed v1) else (V.append v4 v, v3)
+
+amp2 :: Float -> V.Vector Sample -> IO(V.Vector Sample)
+amp2 g v = return $ amp g v
+
+mix2 :: Float -> V.Vector Sample -> V.Vector Sample -> IO(V.Vector Sample)
+mix2 m a b = return $ mix m a b
+
+fdbk' x f1 f2 buf = (bak, out)
+    where out = V.head $ unsafePerformIO $ f1 $ V.singleton $ x + buf
+          bak = V.head $ unsafePerformIO $ f2 $ V.singleton out
+
+fdbk :: IO((V.Vector Sample -> IO(V.Vector Sample)) -> (V.Vector Sample -> IO(V.Vector Sample)) -> V.Vector Sample -> IO(V.Vector Sample))
+fdbk = do
+    r <- newIORef 0
+    pure $ \f1 f2 v -> do
+        let g x = unsafePerformIO $ atomicModifyIORef r $ fdbk' x f1 f2
+        -- let g = id
+        return $ V.map g v    
+
+fdbkdelay :: Int -> IO(Float -> V.Vector Sample -> IO(V.Vector Sample))
+fdbkdelay n = do
+    d <- delay2 n
+    f <- fdbk
+    pure $ \fb v -> f d (amp2 fb) v
+
+process :: IO(Control -> V.Vector Sample -> IO(V.Vector Sample))
+process = do 
+    fd <- fdbkdelay 22050
+    pure $ \ctrl v -> fd (vGain ctrl) v
+    --pure $ \ctrl v -> amp2 2 =<< mix2 (1-(vGain ctrl)) v =<< d v
 
 {---------------------------------------------------------------------
 | CTX
 ---------------------------------------------------------------------}
 
-type Context = (Control -> V.Vector Sample -> V.Vector Sample)
+type Context = (Control -> V.Vector Sample -> IO (V.Vector Sample))--(Control -> V.Vector Sample -> IO(V.Vector Sample))
 
 foreign export ccall startCtx :: IO(StablePtr Context)
-startCtx = newStablePtr process
+startCtx = process >>= newStablePtr 
 
 foreign export ccall freeCtx :: StablePtr Context -> IO()
 freeCtx = freeStablePtr
@@ -90,5 +127,7 @@ main2 pf ns np ci co il ir ol or = do
     irv <- V.peek ns ir
     cip <- V.peek np ci
     let ctrl = raw2ctrl' ctrlFields cip
-    let out = f ctrl $ V.zipWith Stereo ilv irv
+    let i = V.zipWith Stereo ilv irv
+    out <- f ctrl i
+    -- out <- f i
     poke2 ol or $ V.map stereoToFloat out

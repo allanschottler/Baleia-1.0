@@ -1,5 +1,6 @@
 // StartEnd.c
 #include <Rts.h>
+#include <HsFFI.h>
 
 void HsStart()
 {

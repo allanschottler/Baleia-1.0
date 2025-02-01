@@ -1,4 +1,4 @@
-LIBRARY MyModule
+LIBRARY Baleia
 EXPORTS
     HsStart
     HsEnd

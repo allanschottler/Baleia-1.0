@@ -1,15 +1,15 @@
 {-# LANGUAGE FlexibleInstances #-}
 module Baleia.Time where
 
-instance Num (Integer -> Integer) where
-    fromInteger n = \scale -> n * scale
+instance Num (Int -> Int) where
+    fromInteger n = \scale -> fromIntegral n * scale
     (+) = undefined
     (-) = undefined
     (*) = undefined
     abs = undefined
     signum = undefined    
 
-sampleRate, ms, seconds, minutes, tempo, beats, bars :: Integer
+sampleRate, ms, seconds, minutes, tempo, beats, bars :: Int
 
 sampleRate = 44100 --ffi import
 tempo = 150 --ffi import

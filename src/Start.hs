@@ -65,9 +65,13 @@ poke2 ptra ptrb v = go v 0
 ---------------------------------------------------------------------}
 
 -- process :: IO(Control -> V.Vector Sample -> IO(V.Vector Sample))
+-- process = do 
+--     fd <- fdbkdelay $ 1 seconds
+--     pure $ \ctrl v -> mix 0.5 v =<< fd (vGain ctrl) v
+
 process = do 
-    fd <- fdbkdelay $ 1 seconds
-    pure $ \ctrl v -> mix 0.5 v =<< fd (vGain ctrl) v
+    f <- lp2Filter
+    pure $ \c -> f (lgr 20 20000 $ vGain c) 10
 
 -- process = do
 --     d <- delay2 22050
@@ -77,7 +81,7 @@ process = do
 | CTX
 ---------------------------------------------------------------------}
 
-type Context = (Control -> V.Vector Sample -> IO (V.Vector Sample))--(Control -> V.Vector Sample -> IO(V.Vector Sample))
+type Context = (Control -> V.Vector Sample -> IO (V.Vector Sample))
 
 foreign export ccall startCtx :: IO(StablePtr Context)
 startCtx = process >>= newStablePtr 

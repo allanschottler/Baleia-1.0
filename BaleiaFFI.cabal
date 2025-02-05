@@ -2,33 +2,32 @@ cabal-version: 3.12
 name:     Baleia
 version: 1.0
 
--- executable BaleiaTest
---   main-is:             Main.hs
---   hs-source-dirs:      
---     test,
---     src
---   ghc-options:         -O2
---   build-depends:       
---     base >= 4.15 && <= 5,
---     HUnit,
---     syb, 
---     template-haskell,
---     hint,
---     vector,
---     storablevector,
---     storable-tuple,
---     split,
---     directory
---   other-modules:
---     Baleia,
---     Baleia.Math,
---     Baleia.Meta,
---     Baleia.DSP,
---     Baleia.Sample,
---     Baleia.Time,
---     Start,
---     Control
---   default-language:    Haskell2010
+executable BaleiaTest
+  main-is:             Test.hs
+  hs-source-dirs:      
+    -- test,
+    src
+  ghc-options:         -O2
+  build-depends:       
+    base >= 4.15 && <= 5,
+    -- HUnit,
+    syb, 
+    template-haskell,
+    -- hint,
+    vector,
+    storablevector,
+    storable-tuple,
+    split,
+    directory
+  other-modules:
+    Baleia,
+    Baleia.Math,
+    Baleia.Meta,
+    Baleia.DSP,
+    Baleia.Sample,
+    Baleia.Time,
+    Control
+  default-language:    Haskell2010
 
 foreign-library Baleia
   type:                

@@ -2,7 +2,7 @@ module Baleia.DSP where
 
 import Foreign.Storable
 import qualified Data.StorableVector as V
-import qualified Data.Vector.Storable.Mutable as MV
+import qualified Data.Vector as VV
 import Data.IORef
 import System.IO.Unsafe
 
@@ -41,15 +41,19 @@ fclip :: Float -> Sample -> Sample
 fclip thrsh (Mono s) = Mono $ clipi thrsh s
 fclip thrsh (Stereo a b) = Stereo (clipi thrsh a) (clipi thrsh b)
 
-clip :: Float -> V.Vector Sample -> V.Vector Sample
-clip thrsh = V.map $ fclip thrsh
+clip :: Float -> V.Vector Sample -> IO(V.Vector Sample)
+clip thrsh v = return $ V.map (fclip thrsh) v
 
-lin :: Float -> Float -> V.Vector Float -> V.Vector Float
-lin min max = V.map $ lerp min max
+lin :: Float -> Float -> Float -> Float
+lin = lerp
 
 lgr :: Float -> Float -> Float -> Float
-lgr min max v = min + (max-min) * logBase 10 (v+1)
-
+lgr min max v =
+    let logMin = logBase 2 min
+        logMax = logBase 2 max
+        logV = logMin + (logMax - logMin) * v
+    in 2 ** logV
+  
 delay :: Int -> IO (V.Vector Sample -> IO(V.Vector Sample))
 delay n = do
     r <- newIORef (V.replicate n 0)
@@ -58,37 +62,80 @@ delay n = do
             (v3, v4) = V.splitAt (V.length v) v_delayed
         in if V.length v >= n then (v2,  V.append v_delayed v1) else (V.append v4 v, v3)
 
-fdbk' :: Sample -> (V.Vector Sample -> IO(V.Vector Sample)) -> (V.Vector Sample -> IO(V.Vector Sample)) -> Sample -> IO((Sample,Sample))
-fdbk' x f1 f2 buf = do
-    out <- f1 $ V.singleton $ x + buf
-    bak <- f2 $ V.singleton $ V.head out
-    pure (V.head bak, V.head out) 
+fdbk' :: IORef Sample
+     -> V.Vector Sample 
+     -> Int
+     -> (V.Vector Sample -> IO (V.Vector Sample)) 
+     -> (V.Vector Sample -> IO (V.Vector Sample))
+     -> V.Vector Sample 
+     -> IO (V.Vector Sample)
+fdbk' ref acc idx f1 f2 input
+    | idx >= V.length input = return acc
+    | otherwise = do
+        let x = V.index input idx
+        buf <- readIORef ref
+        f1Result <- f1 $ V.singleton (x + buf)
+        let out = V.head f1Result
+        f2Result <- f2 $ V.singleton out
+        let feedback = V.head f2Result
+        writeIORef ref feedback
+        fdbk' ref (V.snoc acc out) (idx + 1) f1 f2 input
 
-fdbk :: IO((V.Vector Sample -> IO(V.Vector Sample)) -> (V.Vector Sample -> IO(V.Vector Sample)) -> V.Vector Sample -> IO(V.Vector Sample))
+fdbk :: IO((V.Vector Sample -> IO (V.Vector Sample)) 
+     -> (V.Vector Sample -> IO (V.Vector Sample))
+     -> V.Vector Sample 
+     -> IO (V.Vector Sample))
 fdbk = do
-    r <- newIORef 0
-    pure $ \f1 f2 v -> do
-        let g x = unsafePerformIO $ atomicModifyIORef r $ \buf -> unsafePerformIO $ fdbk' x f1 f2 buf
-        pure $ V.map g v 
+    ref <- newIORef 0
+    pure $ fdbk' ref V.empty 0
 
 fdbkdelay :: Int -> IO(Float -> V.Vector Sample -> IO(V.Vector Sample))
 fdbkdelay n = do
-    d <- delay n
     f <- fdbk
-    pure $ \fb v -> f d (amp fb) v
+    d <- delay n
+    pure $ \fb -> f d (amp fb)
 
-biFilter :: IO(Float -> Float -> V.Vector Sample -> IO(V.Vector Sample))
-biFilter = do
-    d1 <- delay 1
-    d2 <- delay 1
-    pure $ \a1 a2 v -> do
-        let s1 = d1 v
-        let i1 = amp a1 =<< s1
-        let i2 = amp a2 =<< d2 =<< s1
+ffFilter :: IO(Float -> Float -> V.Vector Sample -> IO(V.Vector Sample))
+ffFilter = do
+    d <- delay 1
+    pure $ \a0 a1 v -> do
+        let i1 = amp a0 v
+        let i2 = amp a1 =<< d v
         V.zipWith (+) <$> i1 <*> i2
 
-biquadFilter :: IO(Float -> Float -> Float -> Float -> Float -> V.Vector Sample -> IO(V.Vector Sample))
-biquadFilter = do
+ff2Filter :: IO(Float -> Float -> Float -> V.Vector Sample -> IO(V.Vector Sample))
+ff2Filter = do
+    d1 <- delay 1
+    d2 <- delay 1
+    pure $ \a0 a1 a2 v -> do
+        let i1 = amp a0 v
+        dd <- d1 v
+        let i2 = amp a1 dd
+        let i3 = amp a2 =<< d2 dd
+        V.zipWith (+) <$> i2 <*> i3
+
+fbFilter :: IO(Float -> Float -> V.Vector Sample -> IO(V.Vector Sample))
+fbFilter = do
+    fb <- fdbk
+    d <- delay 1
+    pure $ \a0 b1 v -> do
+        let i1 = (\v' -> amp (-b1) =<< d v')
+        fb pure i1 =<< amp a0 v
+
+fb2Filter' d1 d2 b1 b2 dd = do    
+    let i2 = amp (-b1) dd
+    let i3 = amp (-b2) =<< d2 dd
+    V.zipWith (+) <$> i2 <*> i3
+
+fb2Filter :: IO(Float -> Float -> V.Vector Sample -> IO(V.Vector Sample))
+fb2Filter = do
+    fb <- fdbk
+    d1 <- delay 1
+    d2 <- delay 1
+    pure $ \b1 b2 v -> fb pure (fb2Filter' d1 d2 b1 b2) =<< d1 v
+
+ffquadFilter :: IO(Float -> Float -> Float -> Float -> Float -> V.Vector Sample -> IO(V.Vector Sample))
+ffquadFilter = do
     fb <- fdbk
     bf1 <- ffFilter
     bf2 <- ffFilter
@@ -98,15 +145,11 @@ biquadFilter = do
         let f = bf2 (-b1) (-b2)
         fb pure f =<< i1
 
--- biquadFilter :: IO(Float -> Float -> Float -> Float -> Float -> V.Vector Sample -> IO(V.Vector Sample))
--- biquadFilter = do
---     fb <- fdbk
---     bi1 <- biFilter
---     bi2 <- biFilter
---     pure $ \a0 a1 a2 b1 b2 v -> do
---         let i0 = amp a0 v
---         let s1 = V.zipWith (+) <$> i0 <*> bi1 a1 a2 v
---         fb pure (bi2 (-b1) (-b2)) =<< s1
+biquadFilter :: IO(Float -> Float -> Float -> Float -> Float -> V.Vector Sample -> IO(V.Vector Sample))
+biquadFilter = do
+    ff2 <- ff2Filter
+    fb2 <- fb2Filter  
+    pure $ \a0 a1 a2 b1 b2 v -> fb2 b1 b2 =<< ff2 a0 a1 a2 v
 
 lp1Filter :: IO(Float -> V.Vector Sample -> IO(V.Vector Sample))
 lp1Filter = do
@@ -137,13 +180,21 @@ lp2Filter = do
         let b2 = 2 * beta
         biq a0 a1 a2 b1 b2 v
 
-ffFilter :: IO(Float -> Float -> V.Vector Sample -> IO(V.Vector Sample))
-ffFilter = do
-    d <- delay 1
-    pure $ \a0 a1 v -> do
-        let i1 = amp a0 v
-        let i2 = amp a1 =<< d v
-        V.zipWith (+) <$> i1 <*> i2
+lp2FilterV2 :: IO(Float -> Float -> V.Vector Sample -> IO(V.Vector Sample))
+lp2FilterV2 = do
+    biq <- ffquadFilter
+    pure $ \freq q v -> do
+        let theta = freq * 2 * pi_c / 44100
+        let d = if q == 0 then 0 else 1 / q
+        let f = 0.5 * d * (Prelude.sin theta)
+        let beta = if f == -1 then 0 else 0.5 * (1 - f) / (1 + f)
+        let gama = (0.5 + beta) * (Prelude.cos theta)
+        let a0 = 0.5 * (0.5 + beta - gama)
+        let a1 = 0.5 + beta - gama 
+        let a2 = a0
+        let b1 = -2 * gama
+        let b2 = 2 * beta
+        biq a0 a1 a2 b1 b2 v
 
 fdbk2 :: IO(Float -> Float -> Float -> V.Vector Sample -> IO(V.Vector Sample))
 fdbk2 = do
@@ -169,11 +220,3 @@ resonator = do
         let b1 = -4 * b2 * (cos th) / (1 + b2) 
         let a0 = (1 - b2) * sqrt (1 - b1 * b1 / (4 * b2))
         fb a0 b1 b2 v
-
-fbFilter :: IO(Float -> Float -> V.Vector Sample -> IO(V.Vector Sample))
-fbFilter = do
-    fb <- fdbk
-    d <- delay 1
-    pure $ \a0 b1 v -> do
-        let i1 = (\v' -> amp (-b1) =<< d v')
-        fb pure i1 =<< amp a0 v

@@ -8,16 +8,13 @@ import Foreign.C.String
 import Foreign.Storable
 import Foreign.Storable.Tuple
 
+import System.Directory
+import System.IO.Unsafe
 import Data.IORef
 import Data.List.Split
--- import qualified Data.StorableVector as V
 import qualified Data.StorableVector as V
 
 import Language.Haskell.TH
-import qualified Language.Haskell.Interpreter as Hint
-
-import System.Directory
-import System.IO.Unsafe
 
 import Baleia
 import Baleia.Meta
@@ -30,12 +27,9 @@ import Control
 | META
 ---------------------------------------------------------------------}
 
-pairEvery' :: [String] -> V.Vector (CString, CString)
-pairEvery' (x:y:xs) = unsafePerformIO $ do
-    cx <- newCString x
-    cy <- newCString y
-    return $ V.cons (cx,cy) $ pairEvery' xs
-pairEvery' [] = V.empty
+pairEvery' :: [String] -> [(String, String)]
+pairEvery' (x:y:xs) = (x,y) : pairEvery' xs
+pairEvery' [] = []
 
 ctrlFields' = $(introspect ''Control)
 ctrlFields = pairEvery' $ split (dropBlanks . dropDelims $ oneOf "()[],\"") ctrlFields' 
@@ -43,13 +37,11 @@ ctrlFields = pairEvery' $ split (dropBlanks . dropDelims $ oneOf "()[],\"") ctrl
 foreign export ccall controlInMeta :: IO(CString)
 controlInMeta = newCString ctrlFields'
 
-raw2ctrl' :: V.Vector (CString, CString) -> V.Vector Float -> Control
-raw2ctrl' fields values = r
-    where zs = V.zipWith (,) fields values
-          r = V.foldr f initControl zs
-          cs2s = unsafePerformIO . peekCString
-          f ((n,t),v) s | (cs2s t) == "Bool" = setField (cs2s n) (v >= 0.5) s
-                        | otherwise = setField (cs2s n) v s
+raw2ctrl' :: [(String, String)] -> [Float] -> Control
+raw2ctrl' fields values = foldr f initControl zs
+    where zs = zipWith (,) fields values
+          f ((n,t),v) s | t == "Bool" = setField n (v >= 0.5) s
+                        | otherwise = setField n v s
 
 poke2 :: (Storable a) => Ptr a -> Ptr a -> V.Vector (a, a) -> IO ()
 poke2 ptra ptrb v = go v 0
@@ -70,8 +62,12 @@ poke2 ptra ptrb v = go v 0
 --     pure $ \ctrl v -> mix 0.5 v =<< fd (vGain ctrl) v
 
 process = do 
-    f <- lp2Filter
-    pure $ \c -> f (lgr 20 20000 $ vGain c) 10
+    f <- lp2FilterV2
+    d <- fdbkdelay (3 beats `div` 4)
+    pure $ \c v -> do
+        f' <- f (lgr 30 18500 $ kP1 c) (lin 0.707 20 $ kP2 c) v
+        dd <- d (kP3 c) f'
+        amp (kGain c) =<< clip (kP5 c) =<< mix (kP4 c) dd f'
 
 -- process = do
 --     d <- delay2 22050
@@ -100,7 +96,7 @@ main2 pf ns np ci co il ir ol or = do
     f <- deRefStablePtr pf
     ilv <- V.peek ns il
     irv <- V.peek ns ir
-    cip <- V.peek np ci
+    cip <- peekArray np ci
     let ctrl = raw2ctrl' ctrlFields cip
     let i = V.zipWith Stereo ilv irv
     out <- f ctrl i

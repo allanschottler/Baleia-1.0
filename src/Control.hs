@@ -2,17 +2,20 @@
 module Control where
 import Baleia
 
--- data Control = Control 
---     { isByps :: Bool
---     , isMono :: Bool 
---     , vGain  :: Float
---     , vPan   :: Float
---     , vFreq  :: Float 
---     } deriving(Data)
-
 data Control = Control 
-    { vGain  :: Float
-    , isByps :: Int 
+    { kByps :: Bool
+    , kGain  :: Float
+    , kP1  :: Float
+    , kP2  :: Float
+    , kP3  :: Float
+    , kP4  :: Float
+    , kP5  :: Float
+    , kP6  :: Float
+    , kP7  :: Float
+    , kP8  :: Float
+    , kP9  :: Float
     } deriving(Data)
 
-initControl = Control 1 0
+initControl = Control False 1 1 1 1 1 1 1 1 1 1
+
+-- kP1 = extern "P1" 1::Float

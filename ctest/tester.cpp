@@ -38,13 +38,7 @@ auto makeInParams(int argc, char *argv[])
     std::vector<float> inparams;
 
     if(argc <= 2)   
-        inparams = std::vector<float>{
-            // 0,  //isByps
-            // 0,  //isMono
-            // 1,  //vGain
-            1, //vPan
-            0,  //isPeak
-        };
+        inparams = std::vector<float>(11, 0);
     else {
         std::vector<char*> fs(&argv[2], &argv[argc]);
         std::cout << fs.size() << std::endl;
@@ -75,8 +69,8 @@ int main(int argc, char *argv[])
     
     HsStart();
     
-    /* auto controlMeta = std::string(static_cast<char*>(controlInMeta()));
-    std::cout << controlMeta << std::endl; */
+    auto controlMeta = std::string(static_cast<char*>(controlInMeta()));
+    std::cout << controlMeta << std::endl;
 
     ctx = startCtx();
 

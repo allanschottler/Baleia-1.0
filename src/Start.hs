@@ -12,6 +12,9 @@ import System.Directory
 import System.IO.Unsafe
 import Data.IORef
 import Data.List.Split
+import Data.Maybe
+import Text.Printf (printf)
+import Control.Exception
 import qualified Data.StorableVector as V
 
 import Language.Haskell.TH
@@ -27,21 +30,28 @@ import Control
 | META
 ---------------------------------------------------------------------}
 
-pairEvery' :: [String] -> [(String, String)]
-pairEvery' (x:y:xs) = (x,y) : pairEvery' xs
-pairEvery' [] = []
-
 ctrlFields' = $(introspect ''Control)
+
+-- Function to group every three items in a list
+pairEvery' :: [String] -> [(String, String)]
+pairEvery' (x:y:xs) = (x, y) : pairEvery' xs
+pairEvery' []         = []
+
 ctrlFields = pairEvery' $ split (dropBlanks . dropDelims $ oneOf "()[],\"") ctrlFields' 
 
-foreign export ccall controlInMeta :: IO(CString)
-controlInMeta = newCString ctrlFields'
+-- Convert the string into a CString for export
+foreign export ccall controlInMeta :: IO CString
+controlInMeta = newCString $ go ctrlFields
+    where go v | v == [] = ""
+               | otherwise = a ++ " " ++ b ++ " " ++ p ++ " " ++ (go $ tail v)
+                   where (a,b) = head v
+                         p = show (getField a initControl :: Float)
 
-raw2ctrl' :: [(String, String)] -> [Float] -> Control
-raw2ctrl' fields values = foldr f initControl zs
-    where zs = zipWith (,) fields values
-          f ((n,t),v) s | t == "Bool" = setField n (v >= 0.5) s
-                        | otherwise = setField n v s
+raw2ctrl' :: [Float] -> Control
+raw2ctrl' values = foldr f initControl zs
+    where zs = zipWith (\(a,b) v -> (a,b,v)) ctrlFields values
+          f (n,t,v) s | t == "Bool" = setField n (v >= 0.5) s
+                      | otherwise = setField n v s
 
 poke2 :: (Storable a) => Ptr a -> Ptr a -> V.Vector (a, a) -> IO ()
 poke2 ptra ptrb v = go v 0
@@ -65,9 +75,9 @@ process = do
     f <- lp2FilterV2
     d <- fdbkdelay (3 beats `div` 4)
     pure $ \c v -> do
-        f' <- f (lgr 30 18500 $ kP1 c) (lin 0.707 20 $ kP2 c) v
-        dd <- d (kP3 c) f'
-        amp (kGain c) =<< clip (kP5 c) =<< mix (kP4 c) dd f'
+        f' <- f (lgr 30 18500 $ _Freq c) (lin 0.707 20 $ _Q c) v
+        dd <- d (_Feedback c) f'
+        amp (_Gain c) =<< clip (_Clip c) =<< mix (1-(_DryWet c)) dd f'
 
 -- process = do
 --     d <- delay2 22050
@@ -97,7 +107,7 @@ main2 pf ns np ci co il ir ol or = do
     ilv <- V.peek ns il
     irv <- V.peek ns ir
     cip <- peekArray np ci
-    let ctrl = raw2ctrl' ctrlFields cip
+    let ctrl = raw2ctrl' cip
     let i = V.zipWith Stereo ilv irv
     out <- f ctrl i
     poke2 ol or $ V.map stereoToFloat out

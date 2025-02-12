@@ -3,19 +3,16 @@ module Control where
 import Baleia
 
 data Control = Control 
-    { kByps :: Bool
-    , kGain  :: Float
-    , kP1  :: Float
-    , kP2  :: Float
-    , kP3  :: Float
-    , kP4  :: Float
-    , kP5  :: Float
-    , kP6  :: Float
-    , kP7  :: Float
-    , kP8  :: Float
-    , kP9  :: Float
-    } deriving(Data)
+{ _Gain  :: Float
+, _Freq  :: Float
+, _Q  :: Float
+, _Feedback  :: Float
+, _Clip  :: Float
+, _DryWet  :: Float
+} deriving(Data)
 
-initControl = Control False 1 1 1 1 1 1 1 1 1 1
+initControl = Control 0.5 1 0 0.5 1 0.5
 
 -- kP1 = extern "P1" 1::Float
+--presets = [Control 0.5 1 0 0.5 1 0.5,  --default
+--           Control 0.5 1 0 0.5 1 1]

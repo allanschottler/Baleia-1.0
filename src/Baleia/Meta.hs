@@ -1,16 +1,22 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module Baleia.Meta where
 
 import Language.Haskell.TH
 
 import Data.Typeable (Typeable, typeOf)
-import Data.Data (Data, gfoldl, gmapQi, ConstrRep(AlgConstr),
-                  toConstr, constrRep, constrFields, tyconUQname )
+import Data.Data (Data, gfoldl, gmapQi, gmapQ, ConstrRep(AlgConstr),
+                  toConstr, fromConstr, constrRep, constrFields, tyconUQname )
 import Data.Generics (extT, extQ)   
+import Data.Typeable (cast, Typeable, typeOf)
 import Data.List (elemIndex)
-import Control.Arrow ((&&&))         
+import Data.Dynamic (Dynamic, toDyn, fromDynamic)
+import Language.Haskell.TH.Syntax (Name)
+import Data.Maybe (Maybe(..)) -- Ensure Maybe and Just are in scope
+import Control.Arrow ((&&&)) 
+import Control        
 
 introspect :: Name -> Q Exp
 introspect n = do 
@@ -42,17 +48,19 @@ gmapTi i f x = case gfoldl k z x of { Ti _ a -> a }
 
 ---------------------------------------------------------------------------------------
 
-fieldNames :: (Data r) => r -> [String]
-fieldNames rec =
-  case (constrRep &&& constrFields) $ toConstr rec of
-    (AlgConstr _, fs) | not $ null fs -> fs
-    otherwise                         -> error "Not a record type"
+-- | Get the list of record field names.
+-- fieldNames :: Data r => r -> [String]
+-- fieldNames rec =
+--   case constrFields (toConstr rec) of
+--     [] -> error "Not a record type"
+--     fs -> fs
 
-fieldIndex :: (Data r) => String -> r -> Int
-fieldIndex fieldName rec =
-  case fieldName `elemIndex` fieldNames rec of
-    Just i  -> i
-    Nothing -> error $ "No such field: " ++ fieldName
+-- -- | Look up the index of a field by name.
+-- fieldIndex :: Data r => String -> r -> Int
+-- fieldIndex fieldName rec =
+--   case elemIndex fieldName (fieldNames rec) of
+--     Just i  -> i
+--     Nothing -> error $ "No such field: " ++ fieldName
 
 modifyField :: (Data r, Typeable v) => String -> (v -> v) -> r -> r
 modifyField fieldName m rec = gmapTi i (e `extT` m) rec
@@ -65,10 +73,34 @@ modifyField fieldName m rec = gmapTi i (e `extT` m) rec
 setField :: (Data r, Typeable v) => String -> v -> r -> r
 setField fieldName value = modifyField fieldName (const value)
 
-getField :: (Data r, Typeable v) => String -> r -> v
-getField fieldName rec = gmapQi i (e `extQ` id) rec
-  where
-    i = fieldName `fieldIndex` rec
-    e x = error $ "Type mismatch: " ++ fieldName ++
-                             " :: " ++ (show . typeOf $ x) ++
-                           ", not " ++ (show . typeOf $ e undefined)
+-- | Get the record field names.
+fieldNames :: Data r => r -> [String]
+fieldNames rec =
+  let fs = constrFields (toConstr rec)
+  in if null fs 
+       then error "Not a record type or no field names available"
+       else fs
+
+-- | Look up the index of a field by name.
+fieldIndex :: Data r => String -> r -> Int
+fieldIndex fieldName rec =
+  case elemIndex fieldName (fieldNames rec) of
+    Just i  -> i
+    Nothing -> error $ "No such field: " ++ fieldName
+
+----------------------------------------------------------------
+-- A safe getField using Dynamic
+
+getField :: forall r v. (Data r, Typeable v) => String -> r -> v
+getField fieldName rec =
+  let idx :: Int
+      idx = fieldIndex fieldName rec
+      -- use gmapQ to collect all immediate children (the record fields)
+      children :: [Dynamic]
+      children = gmapQ toDyn rec
+  in if idx < length children then
+       case fromDynamic (children !! idx) of
+         Just v  -> v
+         Nothing -> error $ "Type mismatch for field " ++ fieldName
+     else error $ "Index out of bounds for field " ++ fieldName
+                           

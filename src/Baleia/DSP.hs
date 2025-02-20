@@ -53,7 +53,13 @@ lgr min max v =
         logMax = logBase 2 max
         logV = logMin + (logMax - logMin) * v
     in 2 ** logV
-  
+
+unipol :: Float -> Float -- -1 to 1 => 0 to 1
+unipol x = (x + 1) / 2
+
+bipol :: Float -> Float -- 0 to 1 => -1 to 1
+bipol x = 2 * x - 1
+
 delay :: Int -> IO (V.Vector Sample -> IO(V.Vector Sample))
 delay n = do
     r <- newIORef (V.replicate n 0)
@@ -61,6 +67,41 @@ delay n = do
         let (v1, v2) = V.splitAt (V.length v - n) v
             (v3, v4) = V.splitAt (V.length v) v_delayed
         in if V.length v >= n then (v2,  V.append v_delayed v1) else (V.append v4 v, v3)
+
+-- | A dynamic delay with fractional delay time using linear interpolation.
+--   The delay time (in samples) is given as a Float (must be <= 44100).
+--   The returned function takes a delay time and an input vector,
+--   updates the internal fixed-length (maxDelay) buffer, and returns an
+--   output vector where each sample is read using interpolation.
+dydelay :: IO (Float -> V.Vector Sample -> IO (V.Vector Sample))
+dydelay = do
+    let maxDelay        = 44100
+        smoothingFactor = 0.01  -- adjust this value: smaller = slower smoothing
+    bufRef <- newIORef (V.replicate maxDelay (rawToMono 0))
+    dtRef  <- newIORef 0  -- current (smoothed) delay time
+    pure $ \desiredDelayTime v -> do
+        -- Smooth the delayTime parameter
+        currentDelayTime <- readIORef dtRef
+        let newDelayTime = (1 - smoothingFactor) * currentDelayTime + smoothingFactor * desiredDelayTime
+        writeIORef dtRef newDelayTime
+        -- Update the delay buffer
+        atomicModifyIORef bufRef $ \buf ->
+            let combined    = buf `V.append` v
+                combinedLen = V.length combined
+                newBuf      = V.drop (combinedLen - maxDelay) combined
+                outLength   = V.length v
+                out         = V.sample outLength $ \i ->
+                                let pos   = fromIntegral maxDelay - newDelayTime + fromIntegral i
+                                    j     = floor pos          -- integer part of pos
+                                    frac  = pos - fromIntegral j -- fractional part of pos
+                                    -- Use circular indexing
+                                    j'    = j `mod` maxDelay
+                                    jNext = (j + 1) `mod` maxDelay
+                                    s1    = V.index newBuf j'
+                                    s2    = V.index newBuf jNext
+                                    interp = (rawToMono (1 - frac)) * s1 + (rawToMono frac) * s2
+                                in interp
+            in (newBuf, out)
 
 fdbk' :: IORef Sample
      -> V.Vector Sample 
@@ -94,6 +135,18 @@ fdbkdelay n = do
     f <- fdbk
     d <- delay n
     pure $ \fb -> f d (amp fb)
+
+delayFeedback :: Int -> Float -> V.Vector Sample -> V.Vector Sample
+delayFeedback n fb xs = ys
+  where
+    -- The output ys is defined recursively:
+    ys = V.zipWith (+) xs (V.map (* rawToMono fb) (V.append (V.replicate n 0) ys))
+
+dyfdbkdelay :: IO(Float -> Float -> V.Vector Sample -> IO(V.Vector Sample))
+dyfdbkdelay = do
+    f <- fdbk
+    d <- dydelay
+    pure $ \n fb -> f (d n) (amp fb)
 
 ffFilter :: IO(Float -> Float -> V.Vector Sample -> IO(V.Vector Sample))
 ffFilter = do

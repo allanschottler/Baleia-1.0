@@ -38,7 +38,7 @@ auto makeInParams(int argc, char *argv[])
     std::vector<float> inparams;
 
     if(argc <= 2)   
-        inparams = std::vector<float>(11, 0);
+        inparams = std::vector<float>(7, 1);
     else {
         std::vector<char*> fs(&argv[2], &argv[argc]);
         std::cout << fs.size() << std::endl;
@@ -77,14 +77,14 @@ int main(int argc, char *argv[])
     int total = 0;
 
 try{
-    for(int j(0); j < 200; ++j)
+    for(int j(0); j < 3; ++j)
     {
         //std::cout << "J " << j << std::endl;
         
         // std::cout << "main" << j << std::endl;
         auto start = std::chrono::high_resolution_clock::now();
         //main2(ctx, nsamples, inparams.size(), inparams.data(), outparams.data(), ils.data(), irs.data(), ols.data(), ors.data());
-        main2(ctx, nsamples, inparams.size(), inparams.data(), outparams.data(), ils.data(), irs.data(), ols.data(), ors.data());
+        ctx = main2(ctx, nsamples, inparams.size(), inparams.data(), outparams.data(), ils.data(), irs.data(), ols.data(), ors.data());
         auto stop = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::microseconds>(stop - start);
             

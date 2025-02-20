@@ -1,113 +1,141 @@
+{-# LANGUAGE ForeignFunctionInterface #-}
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module Start where
 
-import Foreign.Ptr
+import Foreign
+import Foreign.C.Types
+import Foreign.C.String
 import Foreign.Marshal.Array
 import Foreign.StablePtr
-import Foreign.C.String
-import Foreign.Storable
+import Data.List.Split
 import Foreign.Storable.Tuple
 
-import System.Directory
-import System.IO.Unsafe
-import Data.IORef
-import Data.List.Split
-import Data.Maybe
-import Text.Printf (printf)
-import Control.Exception
-import qualified Data.StorableVector as V
+-- We use Data.Vector.Storable for vector operations.
+import qualified Data.Vector.Storable as V
+import qualified Data.Vector.Storable.Mutable as MV
 
-import Language.Haskell.TH
-
-import Baleia
+import Control           -- Provides Control, raw2ctrl', poke2, initControl, etc.
+import Baleia.Sample    -- For stereo/sample helpers
 import Baleia.Meta
-import Baleia.Sample
-import Baleia.DSP
-import Baleia.Time
-import Control
+import Baleia.SFPrototype  -- Provides SF, processVectorSFBufStereo, exampleChainStereo, etc.
+import Control.Arrow
+import Prelude hiding (length)
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 
-{---------------------------------------------------------------------
-| META
----------------------------------------------------------------------}
-
+-- Introspect control fields.
 ctrlFields' = $(introspect ''Control)
 
--- Function to group every three items in a list
 pairEvery' :: [String] -> [(String, String)]
 pairEvery' (x:y:xs) = (x, y) : pairEvery' xs
 pairEvery' []         = []
 
-ctrlFields = pairEvery' $ split (dropBlanks . dropDelims $ oneOf "()[],\"") ctrlFields' 
+ctrlFields = pairEvery' $ split (dropBlanks . dropDelims $ oneOf "()[],\"") ctrlFields'
 
--- Convert the string into a CString for export
 foreign export ccall controlInMeta :: IO CString
 controlInMeta = newCString $ go ctrlFields
-    where go v | v == [] = ""
-               | otherwise = a ++ " " ++ b ++ " " ++ p ++ " " ++ (go $ tail v)
-                   where (a,b) = head v
-                         p = show (getField a initControl :: Float)
+  where
+    go [] = ""
+    go ((n,t):xs) =
+      n ++ " " ++ t ++ " " ++ p ++ " " ++ go xs
+      where p | t == "Bool" = show (getField n initControl :: Bool)
+              | otherwise   = show (getField n initControl :: Float)
 
 raw2ctrl' :: [Float] -> Control
 raw2ctrl' values = foldr f initControl zs
-    where zs = zipWith (\(a,b) v -> (a,b,v)) ctrlFields values
-          f (n,t,v) s | t == "Bool" = setField n (v >= 0.5) s
-                      | otherwise = setField n v s
+  where
+    zs = zipWith (\(a,b) v -> (a,b,v)) ctrlFields values
+    f (n,t,v) s | t == "Bool" = setField n (v >= 0.5) s
+                | otherwise   = setField n v s
 
 poke2 :: (Storable a) => Ptr a -> Ptr a -> V.Vector (a, a) -> IO ()
-poke2 ptra ptrb v = go v 0
-    where go v' n | V.null v' = return ()
-                  | otherwise = do 
-                        let (a, b) = V.head v' 
-                        pokeElemOff ptra n a
-                        pokeElemOff ptrb n b
-                        go (V.tail v') (n + 1)
+poke2 ptra ptrb vec = go vec 0
+  where
+    go v n | V.null v = return ()
+           | otherwise = do
+               let (a, b) = V.head v
+               pokeElemOff ptra n a
+               pokeElemOff ptrb n b
+               go (V.tail v) (n+1)
 
-{---------------------------------------------------------------------
-| CUSTOM
----------------------------------------------------------------------}
+--------------------------------------------------------------------------------
+-- Helper: vzipWith
+--------------------------------------------------------------------------------
+vzipWith :: (Storable a, Storable b, Storable c)
+         => (a -> b -> c) -> V.Vector a -> V.Vector b -> V.Vector c
+vzipWith f va vb = V.fromList $ zipWith f (V.toList va) (V.toList vb)
 
--- process :: IO(Control -> V.Vector Sample -> IO(V.Vector Sample))
--- process = do 
---     fd <- fdbkdelay $ 1 seconds
---     pure $ \ctrl v -> mix 0.5 v =<< fd (vGain ctrl) v
+--------------------------------------------------------------------------------
+-- DSPState and SF Creation (Stereo)
+--------------------------------------------------------------------------------
 
-process = do 
-    f <- lp2FilterV2
-    d <- fdbkdelay (3 beats `div` 4)
-    pure $ \c v -> do
-        f' <- f (lgr 30 18500 $ _Freq c) (lin 0.707 20 $ _Q c) v
-        dd <- d (_Feedback c) f'
-        amp (_Gain c) =<< clip (_Clip c) =<< mix (1-(_DryWet c)) dd f'
+-- | DSPState now holds a Control, a stereo-processing SF, and an IORef for a reusable buffer.
+type DSPState = (Control, SF (Float, Float) (Float, Float))
 
--- process = do
---     d <- delay2 22050
---     pure $ \ctrl v -> amp2 2 =<< mix2 (1-(vGain ctrl)) v =<< d v
+-- | Build an SF from the current control.
+processSFStereo :: Control -> SF (Float, Float) (Float, Float)
+processSFStereo ctrl = stereoDelaySFPure 44100 <<< stereoDelaySFPure 44100  -- Replace with your actual chain
 
-{---------------------------------------------------------------------
-| CTX
----------------------------------------------------------------------}
+-- | A placeholder stereo SF that passes through its input.
+exampleChainStereo :: SF (Float, Float) (Float, Float)
+exampleChainStereo = arr id
+{-# INLINE exampleChainStereo #-}
 
-type Context = (Control -> V.Vector Sample -> IO (V.Vector Sample))
 
-foreign export ccall startCtx :: IO(StablePtr Context)
-startCtx = process >>= newStablePtr 
+processVectorSFPure :: forall a b. (Storable a, Storable b)
+                    => SF a b -> V.Vector a -> (V.Vector b, SF a b)
+processVectorSFPure sf vec =
+  let n = V.length vec
+      (ys, finalSF) = go 0 sf [] n
+  in (V.fromList (reverse ys), finalSF)
+  where
+    go :: Int -> SF a b -> [b] -> Int -> ([b], SF a b)
+    go i currentSF acc n
+      | i >= n    = (acc, currentSF)
+      | otherwise =
+          let (y, nextSF) = runSF currentSF (vec V.! i)
+          in go (i + 1) nextSF (y : acc) n
+{-# INLINE processVectorSFPure #-}
 
-foreign export ccall freeCtx :: StablePtr Context -> IO()
+
+--------------------------------------------------------------------------------
+-- FFI Exports: startCtx and freeCtx
+--------------------------------------------------------------------------------
+
+foreign export ccall startCtx :: IO (StablePtr DSPState)
+startCtx :: IO (StablePtr DSPState)
+startCtx = do
+  newStablePtr (initControl, processSFStereo initControl)
+
+foreign export ccall freeCtx :: StablePtr DSPState -> IO ()
+freeCtx :: StablePtr DSPState -> IO ()
 freeCtx = freeStablePtr
 
-{---------------------------------------------------------------------
- | main2
- | Main function being called from C/C++ side.
- | Responsible for marshaling types and converting ptrs into vectors.
----------------------------------------------------------------------}
+--------------------------------------------------------------------------------
+-- FFI Export: main2
+--------------------------------------------------------------------------------
 
-foreign export ccall main2 :: StablePtr Context -> Int -> Int -> Ptr Float -> Ptr Float -> Ptr Float -> Ptr Float -> Ptr Float -> Ptr Float -> IO()
-main2 pf ns np ci co il ir ol or = do
-    f <- deRefStablePtr pf
-    ilv <- V.peek ns il
-    irv <- V.peek ns ir
-    cip <- peekArray np ci
-    let ctrl = raw2ctrl' cip
-    let i = V.zipWith Stereo ilv irv
-    out <- f ctrl i
-    poke2 ol or $ V.map stereoToFloat out
+foreign export ccall main2 :: StablePtr DSPState -> Int -> Int ->
+                              Ptr Float -> Ptr Float ->
+                              Ptr Float -> Ptr Float ->
+                              Ptr Float -> Ptr Float -> IO (StablePtr DSPState)
+main2 :: StablePtr DSPState -> Int -> Int ->
+         Ptr Float -> Ptr Float ->
+         Ptr Float -> Ptr Float ->
+         Ptr Float -> Ptr Float -> IO (StablePtr DSPState)
+main2 dspPtr ns np ci _co il ir ol or = do
+  (oldCtrl, oldSF) <- deRefStablePtr dspPtr
+  let n = ns
+  leftList  <- peekArray n il
+  rightList <- peekArray n ir
+  let leftIn   = V.fromList (map realToFrac leftList) :: V.Vector Float
+      rightIn  = V.fromList (map realToFrac rightList) :: V.Vector Float
+      stereoIn = vzipWith (,) leftIn rightIn :: V.Vector (Float, Float)
+  ctrlList <- peekArray np ci
+  let newCtrl = raw2ctrl' (map realToFrac ctrlList)
+      (stereoOut, sfNext) = processVectorSFPure oldSF stereoIn
+      leftOut  = V.map (realToFrac . fst) stereoOut :: V.Vector Float
+      rightOut = V.map (realToFrac . snd) stereoOut :: V.Vector Float
+  poke2 ol or (vzipWith (,) leftOut rightOut)
+  newStablePtr (newCtrl, sfNext)

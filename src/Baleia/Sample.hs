@@ -7,6 +7,7 @@ module Baleia.Sample
 , stereoToMono
 , stereoToFloat
 , monoToFloat 
+, safeMono
 , left
 , right
 , Baleia.Sample.max
@@ -54,6 +55,11 @@ stereoToFloat (Mono a) = (a,a)
 monoToFloat :: Sample -> Float
 monoToFloat Silence = 0
 monoToFloat (Mono a) = a
+
+safeMono :: Sample -> Float
+safeMono Silence      = 0
+safeMono (Mono a)     = a
+safeMono (Stereo a b) = (a + b) / 2
 
 left :: Sample -> Sample
 left Silence = Silence

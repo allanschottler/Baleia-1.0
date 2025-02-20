@@ -2,19 +2,25 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 module Baleia.SFPrototype where
 
-import qualified Data.Sequence as Seq
-import Data.Sequence (Seq, (|>))
+import qualified Data.Vector.Storable as V
+import qualified Data.Vector.Storable.Mutable as MV
 import Control.Category
 import Prelude hiding ((.), id)
 import Control.Arrow
+import System.IO.Unsafe (unsafePerformIO)
+import Control.Monad.ST (runST)
+import Foreign.Storable (Storable)
+import Foreign.Ptr (Ptr)
 
 --------------------------------------------------------------------------------
--- Pure SF Abstraction
+-- SF Abstraction
 --------------------------------------------------------------------------------
 
--- | A minimal signal function abstraction.
---   An SF takes an input sample and returns an output sample along with the updated SF.
-newtype SF a b = SF { runSF :: a -> (b, SF a b) }
+newtype SF a b = SF { unSF :: a -> (b, SF a b) }
+
+runSF :: SF a b -> a -> (b, SF a b)
+runSF (SF f) = f
+{-# INLINE runSF #-}
 
 instance Category SF where
   id = SF (\a -> (a, id))
@@ -22,54 +28,73 @@ instance Category SF where
     let (b, sf1) = f a
         (c, sf2) = g b
     in (c, sf2 . sf1)
+  {-# INLINE (.) #-}
 
 instance Arrow SF where
   arr f = SF (\a -> (f a, arr f))
+  {-# INLINE arr #-}
   first (SF f) = SF $ \(b, d) ->
     let (c, sf') = f b
     in ((c, d), first sf')
+  {-# INLINE first #-}
 
 --------------------------------------------------------------------------------
--- Pure Delay Using Data.Sequence
+-- Efficient Delay Using a Mutable Ring Buffer (Mono)
 --------------------------------------------------------------------------------
 
--- | Process one sample through the delay buffer.
---   The buffer is modeled as a sequence of Float values.
-delayStep :: Seq Float -> Float -> (Float, Seq Float)
-delayStep buf x = case Seq.viewl buf of
-  Seq.EmptyL       -> error "delayStep: buffer is empty"
-  y Seq.:< rest -> (y, rest |> x)
+data Delay = Delay { dBuf :: MV.IOVector Float, dIdx :: Int }
 
--- | Pure delay SF (mono) using a Data.Sequence as a ring buffer.
---   The delay line is represented by a sequence of length n.
-delaySFPure :: Int -> SF Float Float
-delaySFPure n = delay (Seq.replicate n 0)
+processDelay :: Delay -> Float -> (Float, Delay)
+processDelay st x = unsafePerformIO $ do
+  let buf = dBuf st
+      idx = dIdx st
+  y <- MV.read buf idx
+  MV.write buf idx x
+  let newIdx = (idx + 1) `mod` MV.length buf
+  return (y, st { dIdx = newIdx })
+
+stereoDelaySF :: Int -> IO(SF (Float, Float) (Float, Float))
+stereoDelaySF n = do
+  bufL <- MV.new n
+  MV.set bufL 0
+  bufR <- MV.new n
+  MV.set bufR 0
+  let initDelayL = Delay { dBuf = bufL, dIdx = 0 }
+      initDelayR = Delay { dBuf = bufR, dIdx = 0 }
+  return (delayStereo initDelayL initDelayR)
   where
-    delay buf = SF $ \x ->
-      let (y, buf') = delayStep buf x
-      in (y, delay buf')
-{-# INLINE delaySFPure #-}
+    delayStereo stL stR = SF $ \(l, r) ->
+      let (yL, stL') = processDelay stL l
+          (yR, stR') = processDelay stR r
+      in ((yL, yR), delayStereo stL' stR')
+{-# NOINLINE stereoDelaySF #-}
 
---------------------------------------------------------------------------------
--- Pure Stereo Delay
---------------------------------------------------------------------------------
+-- | Process one sample with feedback.
+--   Instead of just writing the new input, we write: newVal = input + fbGain * delayedOutput.
+processDelayFeedback :: Delay -> Float -> Float -> (Float, Delay)
+processDelayFeedback st x fbGain = unsafePerformIO $ do
+  let buf = dBuf st
+      idx = dIdx st
+  y <- MV.read buf idx
+  let newVal = x + fbGain * y
+  MV.write buf idx newVal
+  let newIdx = (idx + 1) `mod` MV.length buf
+  return (y, st { dIdx = newIdx })
 
--- | Pure stereo delay SF using separate delay buffers for left and right channels.
-stereoDelaySFPure :: Int -> SF (Float, Float) (Float, Float)
-stereoDelaySFPure n = stereoDelay (Seq.replicate n 0, Seq.replicate n 0)
+-- | A stereo feedback delay SF.
+stereoDelayFeedbackSF :: Int -> IO (Float -> SF (Float, Float) (Float, Float))
+stereoDelayFeedbackSF n = do
+  bufL <- MV.new n
+  MV.set bufL 0
+  bufR <- MV.new n
+  MV.set bufR 0
+  let initDelayL = Delay { dBuf = bufL, dIdx = 0 }
+      initDelayR = Delay { dBuf = bufR, dIdx = 0 }
+  pure $ \fbGain -> (delayStereo initDelayL initDelayR fbGain)
   where
-    stereoDelay (bufL, bufR) = SF $ \(l, r) ->
-      let (yL, bufL') = delayStep bufL l
-          (yR, bufR') = delayStep bufR r
-      in ((yL, yR), stereoDelay (bufL', bufR'))
-{-# INLINE stereoDelaySFPure #-}
-
---------------------------------------------------------------------------------
--- Example Stereo Processing Chain
---------------------------------------------------------------------------------
-
--- | Example chain: simply a pure stereo delay with a 1-second delay at 44100 Hz.
-exampleChainStereo :: SF (Float, Float) (Float, Float)
-exampleChainStereo = stereoDelaySFPure 44100
-{-# INLINE exampleChainStereo #-}
+    delayStereo stL stR fbGain = SF $ \(l, r) ->
+      let (yL, stL') = processDelayFeedback stL l fbGain
+          (yR, stR') = processDelayFeedback stR r fbGain
+      in ((yL, yR), delayStereo stL' stR' fbGain)
+{-# NOINLINE stereoDelayFeedbackSF #-}
 

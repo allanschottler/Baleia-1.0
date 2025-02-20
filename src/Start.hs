@@ -19,6 +19,7 @@ import qualified Data.Vector.Storable.Mutable as MV
 import Control           -- Provides Control, raw2ctrl', poke2, initControl, etc.
 import Baleia.Sample    -- For stereo/sample helpers
 import Baleia.Meta
+import Baleia.Time
 import Baleia.SFPrototype  -- Provides SF, processVectorSFBufStereo, exampleChainStereo, etc.
 import Control.Arrow
 import Prelude hiding (length)
@@ -74,14 +75,12 @@ vzipWith f va vb = V.fromList $ zipWith f (V.toList va) (V.toList vb)
 type DSPState = (Control, SF (Float, Float) (Float, Float))
 
 -- | Build an SF from the current control.
-processSFStereo :: Control -> SF (Float, Float) (Float, Float)
-processSFStereo ctrl = stereoDelaySFPure 44100 <<< stereoDelaySFPure 44100  -- Replace with your actual chain
-
--- | A placeholder stereo SF that passes through its input.
-exampleChainStereo :: SF (Float, Float) (Float, Float)
-exampleChainStereo = arr id
-{-# INLINE exampleChainStereo #-}
-
+processSFStereo :: Control -> IO(SF (Float, Float) (Float, Float))
+processSFStereo ctrl = do
+  let amp v (l,r) = (l*v,r*v) 
+  s1 <- stereoDelayFeedbackSF (3 beats `div` 4) 
+  s2 <- stereoDelayFeedbackSF (33 ms)
+  return $ arr (amp (_Gain ctrl)) <<< s1 0.55 <<< s2 (_Feedback ctrl)
 
 processVectorSFPure :: forall a b. (Storable a, Storable b)
                     => SF a b -> V.Vector a -> (V.Vector b, SF a b)
@@ -106,7 +105,8 @@ processVectorSFPure sf vec =
 foreign export ccall startCtx :: IO (StablePtr DSPState)
 startCtx :: IO (StablePtr DSPState)
 startCtx = do
-  newStablePtr (initControl, processSFStereo initControl)
+  st <- processSFStereo initControl
+  newStablePtr (initControl, st)
 
 foreign export ccall freeCtx :: StablePtr DSPState -> IO ()
 freeCtx :: StablePtr DSPState -> IO ()

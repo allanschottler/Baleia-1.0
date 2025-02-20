@@ -12,7 +12,7 @@ data Control = Control
     , _Time  :: Float
     } deriving(Data)
 
-initControl = Control 0.5 1 0 0.5 1 0.5 1
+initControl = Control 1 1 0 0.5 1 0.5 1
 
 -- kP1 = IO(V.Vector Float)
 -- kP1 = extern "P1" 1::Float

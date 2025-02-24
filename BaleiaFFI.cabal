@@ -26,12 +26,10 @@ executable BaleiaTest
     Baleia,
     Baleia.Math,
     Baleia.Meta,
-    Baleia.DSP,
     Baleia.Sample,
     Baleia.Time,
-    Baleia.Oscillator,
-    Baleia.Interpreter,
-    Baleia.SFPrototype,
+    Baleia.Internal,
+    Baleia.Delay,
     Control
   default-language:    Haskell2010
 
@@ -56,12 +54,10 @@ foreign-library Baleia
     Baleia,
     Baleia.Math,
     Baleia.Meta,
-    Baleia.DSP,
     Baleia.Sample,
     Baleia.Time,
-    Baleia.Oscillator,
-    Baleia.Interpreter,
-    Baleia.SFPrototype,
+    Baleia.Internal,
+    Baleia.Delay,
     Start,
     Control
   build-depends:

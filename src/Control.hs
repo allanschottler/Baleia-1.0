@@ -1,6 +1,6 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 module Control where
-import Baleia
+import Data.Data
 
 data Control = Control 
     { _Gain  :: Float
@@ -12,9 +12,10 @@ data Control = Control
     , _Time  :: Float
     } deriving(Data)
 
-initControl = Control 1 1 0 0.5 1 0.5 1
+initControl = Control 1 0.7 0 0.5 1 0.5 1
 
--- kP1 = IO(V.Vector Float)
--- kP1 = extern "P1" 1::Float
---presets = [Control 0.5 1 0 0.5 1 0.5,  --default
---           Control 0.5 1 0 0.5 1 1]
+data OControl = OControl 
+    { _VuPPM  :: Float
+    } deriving(Data)
+
+initOControl = OControl 0

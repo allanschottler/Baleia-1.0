@@ -2,6 +2,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE ImplicitParams #-}
 module Start where
 
 import Foreign
@@ -11,25 +12,26 @@ import Foreign.Marshal.Array
 import Foreign.StablePtr
 import Data.List.Split
 import Foreign.Storable.Tuple
-
--- We use Data.Vector.Storable for vector operations.
 import qualified Data.Vector.Storable as V
-import qualified Data.Vector.Storable.Mutable as MV
-
-import Control           -- Provides Control, raw2ctrl', poke2, initControl, etc.
 import Baleia.Sample    -- For stereo/sample helpers
-import Baleia.Meta
+import Baleia.Meta      -- Provides Control, initControl, etc.
 import Baleia.Time
-import Baleia.SFPrototype  -- Provides SF, processVectorSFBufStereo, exampleChainStereo, etc.
-import Control.Arrow
+import Baleia.Internal
+import Baleia.Delay
+import Control.Arrow (arr, (<<<))
 import Prelude hiding (length)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
+import System.IO.Unsafe
+import Control
 
--- Introspect control fields.
+--------------------------------------------------------------------------------
+-- Control Introspection and Conversion
+--------------------------------------------------------------------------------
+
 ctrlFields' = $(introspect ''Control)
 
 pairEvery' :: [String] -> [(String, String)]
-pairEvery' (x:y:xs) = (x, y) : pairEvery' xs
+pairEvery' (x:y:xs) = (x,y) : pairEvery' xs
 pairEvery' []         = []
 
 ctrlFields = pairEvery' $ split (dropBlanks . dropDelims $ oneOf "()[],\"") ctrlFields'
@@ -50,63 +52,47 @@ raw2ctrl' values = foldr f initControl zs
     f (n,t,v) s | t == "Bool" = setField n (v >= 0.5) s
                 | otherwise   = setField n v s
 
-poke2 :: (Storable a) => Ptr a -> Ptr a -> V.Vector (a, a) -> IO ()
+poke2 :: (Storable a) => Ptr a -> Ptr a -> V.Vector (a,a) -> IO ()
 poke2 ptra ptrb vec = go vec 0
   where
     go v n | V.null v = return ()
            | otherwise = do
-               let (a, b) = V.head v
+               let (a,b) = V.head v
                pokeElemOff ptra n a
                pokeElemOff ptrb n b
                go (V.tail v) (n+1)
 
---------------------------------------------------------------------------------
--- Helper: vzipWith
---------------------------------------------------------------------------------
 vzipWith :: (Storable a, Storable b, Storable c)
          => (a -> b -> c) -> V.Vector a -> V.Vector b -> V.Vector c
 vzipWith f va vb = V.fromList $ zipWith f (V.toList va) (V.toList vb)
 
 --------------------------------------------------------------------------------
--- DSPState and SF Creation (Stereo)
+-- Main process
 --------------------------------------------------------------------------------
 
--- | DSPState now holds a Control, a stereo-processing SF, and an IORef for a reusable buffer.
-type DSPState = (Control, SF (Float, Float) (Float, Float))
-
--- | Build an SF from the current control.
-processSFStereo :: Control -> IO(SF (Float, Float) (Float, Float))
-processSFStereo ctrl = do
-  let amp v (l,r) = (l*v,r*v) 
-  s1 <- stereoDelayFeedbackSF (3 beats `div` 4) 
-  s2 <- stereoDelayFeedbackSF (33 ms)
-  return $ arr (amp (_Gain ctrl)) <<< s1 0.55 <<< s2 (_Feedback ctrl)
-
-processVectorSFPure :: forall a b. (Storable a, Storable b)
-                    => SF a b -> V.Vector a -> (V.Vector b, SF a b)
-processVectorSFPure sf vec =
-  let n = V.length vec
-      (ys, finalSF) = go 0 sf [] n
-  in (V.fromList (reverse ys), finalSF)
-  where
-    go :: Int -> SF a b -> [b] -> Int -> ([b], SF a b)
-    go i currentSF acc n
-      | i >= n    = (acc, currentSF)
-      | otherwise =
-          let (y, nextSF) = runSF currentSF (vec V.! i)
-          in go (i + 1) nextSF (y : acc) n
-{-# INLINE processVectorSFPure #-}
-
+process = do
+  d1 <- fdbkDelay (3 beats `div` 4)
+  d2 <- fdbkDelay (18 ms)
+  return $ clip ~~ _Clip 
+        <~ amp ~~ _Gain 
+        <~ d2 ~~ _Freq 
+        <~ d1 ~~ _Feedback
+{-# INLINE process #-}
 
 --------------------------------------------------------------------------------
 -- FFI Exports: startCtx and freeCtx
 --------------------------------------------------------------------------------
 
+-- | Our external DSP state is a pair:
+--   (IORef Control, SF (Float,Float) (Float,Float))
+type DSPState = (IORef Control, SF Sample Sample)
+
 foreign export ccall startCtx :: IO (StablePtr DSPState)
 startCtx :: IO (StablePtr DSPState)
 startCtx = do
-  st <- processSFStereo initControl
-  newStablePtr (initControl, st)
+  chain <- process
+  ctrlRef <- newIORef initControl
+  newStablePtr (ctrlRef, chain ctrlRef)
 
 foreign export ccall freeCtx :: StablePtr DSPState -> IO ()
 freeCtx :: StablePtr DSPState -> IO ()
@@ -120,22 +106,18 @@ foreign export ccall main2 :: StablePtr DSPState -> Int -> Int ->
                               Ptr Float -> Ptr Float ->
                               Ptr Float -> Ptr Float ->
                               Ptr Float -> Ptr Float -> IO (StablePtr DSPState)
-main2 :: StablePtr DSPState -> Int -> Int ->
-         Ptr Float -> Ptr Float ->
-         Ptr Float -> Ptr Float ->
-         Ptr Float -> Ptr Float -> IO (StablePtr DSPState)
 main2 dspPtr ns np ci _co il ir ol or = do
-  (oldCtrl, oldSF) <- deRefStablePtr dspPtr
-  let n = ns
-  leftList  <- peekArray n il
-  rightList <- peekArray n ir
+  (ctrlRef, oldSF) <- deRefStablePtr dspPtr
+  ctrlList <- peekArray np ci  -- [Float]
+  let newCtrl = raw2ctrl' (map realToFrac ctrlList)
+  writeIORef ctrlRef newCtrl
+  leftList  <- peekArray ns il
+  rightList <- peekArray ns ir
   let leftIn   = V.fromList (map realToFrac leftList) :: V.Vector Float
       rightIn  = V.fromList (map realToFrac rightList) :: V.Vector Float
-      stereoIn = vzipWith (,) leftIn rightIn :: V.Vector (Float, Float)
-  ctrlList <- peekArray np ci
-  let newCtrl = raw2ctrl' (map realToFrac ctrlList)
-      (stereoOut, sfNext) = processVectorSFPure oldSF stereoIn
-      leftOut  = V.map (realToFrac . fst) stereoOut :: V.Vector Float
-      rightOut = V.map (realToFrac . snd) stereoOut :: V.Vector Float
-  poke2 ol or (vzipWith (,) leftOut rightOut)
-  newStablePtr (newCtrl, sfNext)
+      stereoIn = V.fromList $ zipWith Stereo (V.toList leftIn) (V.toList rightIn) :: V.Vector Sample
+      (stereoOut, sfNext) = processBlock oldSF stereoIn
+      leftOut  = V.map (realToFrac . monoToFloat . left) stereoOut :: V.Vector Float
+      rightOut = V.map (realToFrac . monoToFloat . right) stereoOut :: V.Vector Float
+  poke2 ol or (V.fromList $ zip (V.toList leftOut) (V.toList rightOut))
+  newStablePtr (ctrlRef, sfNext)

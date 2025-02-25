@@ -43,6 +43,19 @@ instance Arrow SF where
     in ((c,d), first sf')
   {-# INLINE first #-}
 
+-- instance Functor (SF a) where
+--   fmap f (SF g) = SF $ \a ->
+--     let (b, sf') = g a
+--     in (f b, fmap f sf')
+--   {-# INLINE fmap #-}
+
+-- instance Applicative (SF a) where
+--   pure b = SF $ \_ -> (b, pure b)
+--   (SF sf) <*> (SF sg) = SF $ \a ->
+--     let (f, sf') = sf a
+--         (b, sg') = sg a
+--     in (f b, sf' <*> sg')
+--   {-# INLINE (<*>) #-}
 
 --------------------------------------------------------------------------------
 -- Generic Binder (Bound Function Style)
@@ -83,6 +96,13 @@ f <~ g = \ctrl -> (f ctrl) <<< (g ctrl)
 --------------------------------------------------------------------------------
 -- Block Processing (Pure)
 --------------------------------------------------------------------------------
+-- amp 2 <~ lpf _Freq _Q <~ mix _Drywet <~ amp _Gain &~ id_
+
+--  = amp 2 
+-- <~ lpf _Freq _Q 
+-- <~ mix _Drywet 
+--   <~ amp _Gain 
+--   &~ id_
 
 processBlock :: forall a b. (Storable a, Storable b)
                 => SF a b -> V.Vector a -> (V.Vector b, SF a b)
@@ -99,27 +119,36 @@ processBlock sf vec =
           in go (i + 1) nextSF (y : acc) n
 {-# INLINE processBlock #-}
 
-liftSF :: (a -> b -> b) -> SF (a, b) b
-liftSF f = sf
-  where sf = SF $ \(v, s) -> (f v s, sf)
-{-# INLINE liftSF #-}
+liftSF0 :: (Sample -> Sample) -> SF Sample Sample
+liftSF0 f = sf
+  where sf = SF $ \s -> (f s, sf)
+{-# INLINE liftSF0 #-}
 
-liftSF2 :: (a -> b -> c -> c) -> SF (a, b, c) c
+liftSF1 :: (a -> Sample -> Sample) -> SF (a, Sample) Sample
+liftSF1 f = sf
+  where sf = SF $ \(v, s) -> (f v s, sf)
+{-# INLINE liftSF1 #-}
+
+liftSF2 :: (a -> b -> Sample -> Sample) -> SF (a, b, Sample) Sample
 liftSF2 f = sf
   where sf = SF $ \(v1, v2, s) -> (f v1 v2 s, sf)
 {-# INLINE liftSF2 #-}
 
-liftSF3 :: (a -> b -> c -> d -> d) -> SF (a, b, c, d) d
+liftSF3 :: (a -> b -> c -> Sample -> Sample) -> SF (a, b, c, Sample) Sample
 liftSF3 f = sf
   where sf = SF $ \(v1, v2, v3, s) -> (f v1 v2 v3 s, sf)
 {-# INLINE liftSF3 #-}
 
+id_ :: SF Sample Sample
+id_ = liftSF0 $ id
+{-# INLINE id_ #-}
+
 amp :: SF (Float, Sample) Sample
-amp = liftSF $ \gain s -> s * Mono gain
+amp = liftSF1 $ \gain s -> s * Mono gain
 {-# INLINE amp #-}
 
 clip :: SF (Float, Sample) Sample
-clip = liftSF $ \thrsh s -> 
+clip = liftSF1 $ \thrsh s -> 
   case s of
     Mono a -> Mono $ clipi thrsh a
     Stereo a b -> Stereo (clipi thrsh a) (clipi thrsh b)
@@ -128,6 +157,10 @@ clip = liftSF $ \thrsh s ->
                       | otherwise     = v
 {-# INLINE clip #-}
 
-mix :: SF (Float, Sample, Sample) Sample
-mix = liftSF2 $ \gain a b -> lerp a b $ realToFrac gain
-{-# INLINE mix #-}
+pan :: SF (Float, Sample) Sample
+pan = liftSF1 $ \p -> Baleia.Sample.fpan p
+{-# INLINE pan #-}
+
+-- mix :: SF (Float, Sample, Sample) Sample
+-- amp = liftSF1 $ \gain a b -> (a + b) * 0.5
+-- {-# INLINE amp #-}

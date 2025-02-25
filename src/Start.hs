@@ -18,7 +18,7 @@ import Baleia.Meta      -- Provides Control, initControl, etc.
 import Baleia.Time
 import Baleia.Internal
 import Baleia.Delay
-import Control.Arrow (arr, (<<<))
+import Control.Arrow hiding (left,right)
 import Prelude hiding (length)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import System.IO.Unsafe
@@ -73,10 +73,8 @@ vzipWith f va vb = V.fromList $ zipWith f (V.toList va) (V.toList vb)
 process = do
   d1 <- fdbkDelay (3 beats `div` 4)
   d2 <- fdbkDelay (18 ms)
-  return $ clip ~~ _Clip 
-        <~ amp ~~ _Gain 
-        <~ d2 ~~ _Freq 
-        <~ d1 ~~ _Feedback
+  return $ amp ~~ _Gain <~ clip ~~ _Clip <~ d1 ~~ _Feedback <~ d2 ~~ _Freq
+  -- amp ~~ _Gain <~ clip ~~ _Clip <~ mix ~~ _DryWet <~ (d1 ~~ _Feedback <~ d2 ~~ _Freq) ~& id_
 {-# INLINE process #-}
 
 --------------------------------------------------------------------------------
@@ -108,7 +106,7 @@ foreign export ccall main2 :: StablePtr DSPState -> Int -> Int ->
                               Ptr Float -> Ptr Float -> IO (StablePtr DSPState)
 main2 dspPtr ns np ci _co il ir ol or = do
   (ctrlRef, oldSF) <- deRefStablePtr dspPtr
-  ctrlList <- peekArray np ci  -- [Float]
+  ctrlList <- peekArray np ci
   let newCtrl = raw2ctrl' (map realToFrac ctrlList)
   writeIORef ctrlRef newCtrl
   leftList  <- peekArray ns il

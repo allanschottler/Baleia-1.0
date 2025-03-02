@@ -69,12 +69,13 @@ vzipWith f va vb = V.fromList $ zipWith f (V.toList va) (V.toList vb)
 --------------------------------------------------------------------------------
 -- Main process
 --------------------------------------------------------------------------------
-
+process :: IO(IORef Control -> SF Sample Sample)
 process = do
   d1 <- fdbkDelay (3 beats `div` 4)
   d2 <- fdbkDelay (18 ms)
-  return $ amp ~~ _Gain <~ clip ~~ _Clip <~ d1 ~~ _Feedback <~ d2 ~~ _Freq
-  -- amp ~~ _Gain <~ clip ~~ _Clip <~ mix ~~ _DryWet <~ (d1 ~~ _Feedback <~ d2 ~~ _Freq) ~& id_
+  return $ amp ~~ _Gain <~ (\c -> id_) <~ clip ~~ ((*2) . _Clip) <~ d1 ~~ _Feedback <~ d2 ~~ _Freq
+  -- return $ mix ~~ const 0.5 <~ id_ ~~ id_
+
 {-# INLINE process #-}
 
 --------------------------------------------------------------------------------

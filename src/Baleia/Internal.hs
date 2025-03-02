@@ -43,43 +43,43 @@ instance Arrow SF where
     in ((c,d), first sf')
   {-# INLINE first #-}
 
--- instance Functor (SF a) where
---   fmap f (SF g) = SF $ \a ->
---     let (b, sf') = g a
---     in (f b, fmap f sf')
---   {-# INLINE fmap #-}
+instance Functor (SF a) where
+  fmap f (SF g) = SF $ \a ->
+    let (b, sf') = g a
+    in (f b, fmap f sf')
+  {-# INLINE fmap #-}
 
--- instance Applicative (SF a) where
---   pure b = SF $ \_ -> (b, pure b)
---   (SF sf) <*> (SF sg) = SF $ \a ->
---     let (f, sf') = sf a
---         (b, sg') = sg a
---     in (f b, sf' <*> sg')
---   {-# INLINE (<*>) #-}
+instance Applicative (SF a) where
+  pure b = SF $ \_ -> (b, pure b)
+  (SF sf) <*> (SF sg) = SF $ \a ->
+    let (f, sf') = sf a
+        (b, sg') = sg a
+    in (f b, sf' <*> sg')
+  {-# INLINE (<*>) #-}
+
+
+type CV a = (Control -> a)
+-- data CV a = Static a | Dynamic (Control -> a)
 
 --------------------------------------------------------------------------------
 -- Generic Binder (Bound Function Style)
 --------------------------------------------------------------------------------
 
--- | bindParam' takes a projection function and an unbound SF
---   (of type SF (Float, (Float,Float)) (Float,Float)) and returns a function
---   from Control to a bound SF (of type SF (Float,Float) (Float,Float)).
-bindParam' :: (Control -> a)
-           -> SF (a, Sample) Sample
-           -> (IORef Control -> SF Sample Sample)
-bindParam' proj sf ctrl = SF $ \(s :: Sample) ->
-  let ctrl' = unsafePerformIO $ readIORef ctrl
-      p   = proj ctrl'
+bindParam' :: CV a
+          -> SF (a, Sample) Sample
+          -> (IORef Control -> SF Sample Sample)
+bindParam' cv sf ctrl = SF $ \(s :: Sample) ->
+  let p   = cv $ unsafePerformIO $ readIORef ctrl
       inp = (p, s)
       (out, sfNext) = runSF sf inp
-  in (out, bindParam' proj sfNext ctrl)
+  in (out, bindParam' cv sfNext ctrl)
 
 -- | Infix version.
 infixl 9 ~~
 (~~) :: SF (a, Sample) Sample
-      -> (Control -> a)
+      -> CV a
       -> (IORef Control -> SF Sample Sample)
-sf ~~ proj = bindParam' proj sf
+sf ~~ cv = bindParam' cv sf
 {-# INLINE (~~) #-}
 
 --------------------------------------------------------------------------------
@@ -161,6 +161,6 @@ pan :: SF (Float, Sample) Sample
 pan = liftSF1 $ \p -> Baleia.Sample.fpan p
 {-# INLINE pan #-}
 
--- mix :: SF (Float, Sample, Sample) Sample
--- amp = liftSF1 $ \gain a b -> (a + b) * 0.5
--- {-# INLINE amp #-}
+mix :: SF (Sample, Sample) Sample
+mix = liftSF1 $ \a b -> (a + b) * 0.5
+{-# INLINE mix #-}

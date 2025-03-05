@@ -1,6 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE ImplicitParams #-}
+{-# LANGUAGE FlexibleContexts #-}
 module Baleia.Internal where
 
 import qualified Data.Vector.Storable as V
@@ -10,6 +11,7 @@ import Prelude hiding ((.), id)
 import Control.Arrow
 import System.IO.Unsafe (unsafePerformIO)
 import Foreign.Storable (Storable)
+import Foreign.Storable.Tuple
 import Foreign.Ptr (Ptr)
 import Data.IORef
 import Baleia.Meta
@@ -43,66 +45,47 @@ instance Arrow SF where
     in ((c,d), first sf')
   {-# INLINE first #-}
 
-instance Functor (SF a) where
-  fmap f (SF g) = SF $ \a ->
-    let (b, sf') = g a
-    in (f b, fmap f sf')
-  {-# INLINE fmap #-}
-
-instance Applicative (SF a) where
-  pure b = SF $ \_ -> (b, pure b)
-  (SF sf) <*> (SF sg) = SF $ \a ->
-    let (f, sf') = sf a
-        (b, sg') = sg a
-    in (f b, sf' <*> sg')
-  {-# INLINE (<*>) #-}
-
-
 type CV a = (Control -> a)
+-- type CV2 a = SF Control a
 -- data CV a = Static a | Dynamic (Control -> a)
 
---------------------------------------------------------------------------------
--- Generic Binder (Bound Function Style)
---------------------------------------------------------------------------------
+-- mapSF :: Arrow arr => (b -> c) -> arr a b -> arr a c
+-- mapSF f a = arr f <<< a
+-- {-# INLINE mapSF #-}
 
-bindParam' :: CV a
-          -> SF (a, Sample) Sample
-          -> (IORef Control -> SF Sample Sample)
-bindParam' cv sf ctrl = SF $ \(s :: Sample) ->
-  let p   = cv $ unsafePerformIO $ readIORef ctrl
-      inp = (p, s)
-      (out, sfNext) = runSF sf inp
-  in (out, bindParam' cv sfNext ctrl)
+-- map2SF :: Arrow arr => ((b, c) -> d) -> arr a b -> arr a c -> arr a d
+-- map2SF f a b = arr f <<< a &&& b
+-- {-# INLINE map2SF #-}
 
--- | Infix version.
-infixl 9 ~~
-(~~) :: SF (a, Sample) Sample
-      -> CV a
-      -> (IORef Control -> SF Sample Sample)
-sf ~~ cv = bindParam' cv sf
-{-# INLINE (~~) #-}
+-- map3SF :: Arrow arr => ((b, c, d) -> e) -> arr a b -> arr a c -> arr a d -> arr a e
+-- map3SF f a b c = arr (\((x, y), z) -> f (x, y, z)) <<< ((a &&& b) &&& c)
+-- {-# INLINE map3SF #-}
+
+id_ :: SF (Control, Sample) (Control, Sample)
+id_ = arr $ \a -> a
+{-# INLINE id_ #-}
+
+amp :: CV Float -> SF (Control, Sample) (Control, Sample)
+amp gain = arr $ \(c, (l,r)) -> (c, (l * (gain c), r * (gain c)))
+{-# INLINE amp #-}
+
+clip :: CV Float -> SF (Control, Sample) (Control, Sample)
+clip thrsh = arr $ \(c, (l,r)) -> (c, (clipi (thrsh c) l, clipi (thrsh c) r))
+  where clipi t v | abs v > t = t * signum v 
+                  | otherwise = v
+{-# INLINE clip #-}
+
+mix :: CV Float -> SF ((Control, Sample), (Control, Sample)) (Control, Sample)
+mix gain = arr $ \((c1, (l1,r1)), (c2, (l2,r2))) -> (c1, (l1 * (1 - gain c1) + l2 * (gain c1), r1 * (1 - gain c1) + r2 * (gain c1)))
+{-# INLINE mix #-}
+
+switch :: CV Bool -> SF ((Control, Sample), (Control, Sample)) (Control, Sample)
+switch on = arr $ \((c1,a), (c2,b)) -> if on c1 then (c1,a) else (c2,b)
+{-# INLINE switch #-}
 
 --------------------------------------------------------------------------------
--- Composition Operator for Bound Functions
+-- Block Processing
 --------------------------------------------------------------------------------
-
-infixr 8 <~
-(<~) :: (IORef Control -> SF Sample Sample)
-       -> (IORef Control -> SF Sample Sample)
-       -> (IORef Control -> SF Sample Sample)
-f <~ g = \ctrl -> (f ctrl) <<< (g ctrl)
-{-# INLINE (<~) #-}
-
---------------------------------------------------------------------------------
--- Block Processing (Pure)
---------------------------------------------------------------------------------
--- amp 2 <~ lpf _Freq _Q <~ mix _Drywet <~ amp _Gain &~ id_
-
---  = amp 2 
--- <~ lpf _Freq _Q 
--- <~ mix _Drywet 
---   <~ amp _Gain 
---   &~ id_
 
 processBlock :: forall a b. (Storable a, Storable b)
                 => SF a b -> V.Vector a -> (V.Vector b, SF a b)
@@ -119,48 +102,124 @@ processBlock sf vec =
           in go (i + 1) nextSF (y : acc) n
 {-# INLINE processBlock #-}
 
-liftSF0 :: (Sample -> Sample) -> SF Sample Sample
-liftSF0 f = sf
-  where sf = SF $ \s -> (f s, sf)
-{-# INLINE liftSF0 #-}
+--------------------------------------------------------------------------------
+-- Delay
+--------------------------------------------------------------------------------
 
-liftSF1 :: (a -> Sample -> Sample) -> SF (a, Sample) Sample
-liftSF1 f = sf
-  where sf = SF $ \(v, s) -> (f v s, sf)
-{-# INLINE liftSF1 #-}
+data Delay = Delay { dBuf :: MV.IOVector Sample, dIdx :: Int, dDelay :: Float, dXFade :: Maybe (Int, Int, Sample) }
 
-liftSF2 :: (a -> b -> Sample -> Sample) -> SF (a, b, Sample) Sample
-liftSF2 f = sf
-  where sf = SF $ \(v1, v2, s) -> (f v1 v2 s, sf)
-{-# INLINE liftSF2 #-}
+processFdbkDelay :: Delay -> Sample -> Float -> (Sample, Delay)
+processFdbkDelay st x fbGain = unsafePerformIO $ do
+  let buf = dBuf st
+      idx = dIdx st
+  y <- MV.read buf idx
+  let newVal = ( fst x + fbGain * fst y
+               , snd x + fbGain * snd y )
+  MV.write buf idx newVal
+  let newIdx = (idx + 1) `mod` MV.length buf
+  return (y, st { dIdx = newIdx })
+{-# NOINLINE processFdbkDelay #-}
 
-liftSF3 :: (a -> b -> c -> Sample -> Sample) -> SF (a, b, c, Sample) Sample
-liftSF3 f = sf
-  where sf = SF $ \(v1, v2, v3, s) -> (f v1 v2 v3 s, sf)
-{-# INLINE liftSF3 #-}
+--------------------------------------------------------------------------------
+-- Feedback Delay
+--------------------------------------------------------------------------------
 
-id_ :: SF Sample Sample
-id_ = liftSF0 $ id
-{-# INLINE id_ #-}
+fdbkDelay :: Int -> CV Float -> SF (Control, Sample) (Control, Sample)
+fdbkDelay n fbGain = unsafePerformIO $ do
+  buf <- MV.new n
+  MV.set buf (0,0)
+  let initDelay = Delay { dBuf = buf, dIdx = 0, dDelay = 0, dXFade = Nothing }
+  return (fdbkDelay' initDelay)
+  where
+    fdbkDelay' st = SF $ \(c, s) ->
+      let (y, st') = processFdbkDelay st s $ fbGain c
+      in ((c, y), fdbkDelay' st')
+{-# NOINLINE fdbkDelay #-}
 
-amp :: SF (Float, Sample) Sample
-amp = liftSF1 $ \gain s -> s * Mono gain
-{-# INLINE amp #-}
+sampleRate :: Float
+sampleRate = 44100
 
-clip :: SF (Float, Sample) Sample
-clip = liftSF1 $ \thrsh s -> 
-  case s of
-    Mono a -> Mono $ clipi thrsh a
-    Stereo a b -> Stereo (clipi thrsh a) (clipi thrsh b)
-    Silence -> Silence
-  where clipi thrsh v | abs v > thrsh = thrsh * signum v 
-                      | otherwise     = v
-{-# INLINE clip #-}
+-- Duration (in samples) over which to crossfade on an upward delay jump.
+crossfadeDuration :: Int
+crossfadeDuration = 50
 
-pan :: SF (Float, Sample) Sample
-pan = liftSF1 $ \p -> Baleia.Sample.fpan p
-{-# INLINE pan #-}
+-- Helper: Linear interpolation between two samples.
+lerp :: Float -> Sample -> Sample -> Sample
+lerp t (a0, b0) (a1, b1) = ((1-t)*a0 + t*a1, (1-t)*b0 + t*b1)
 
-mix :: SF (Sample, Sample) Sample
-mix = liftSF1 $ \a b -> (a + b) * 0.5
-{-# INLINE mix #-}
+-- Helper to compute an interpolated output from a specified delay value (without updating state).
+computeOutput :: Delay -> Float -> Sample
+computeOutput st delayVal = unsafePerformIO $ do
+  let buf    = dBuf st
+      len    = MV.length buf
+      writeIdx = dIdx st
+      intDelay = floor delayVal
+      frac     = delayVal - fromIntegral intDelay
+      readIdx  = (writeIdx - intDelay + len) `mod` len
+      nextIdx  = (readIdx + 1) `mod` len
+  y0 <- MV.read buf readIdx
+  y1 <- MV.read buf nextIdx
+  return $ if frac == 0 then y0 else lerp frac y0 y1
+
+-- Main process function with crossfade handling for upward delay jumps.
+processFdbkDelayVarInterpCrossFade :: Delay -> Sample -> Float -> Float -> (Sample, Delay)
+processFdbkDelayVarInterpCrossFade st x desiredDelay fbGain = unsafePerformIO $ do
+  let buf       = dBuf st
+      len       = MV.length buf
+      writeIdx  = dIdx st
+      oldDelay  = dDelay st
+      -- A small threshold to detect an upward jump in delay.
+      threshold = 1.0
+      -- If an upward jump is detected and we're not already crossfading, initiate a crossfade.
+      (baseDelay, xfade) =
+        if desiredDelay > oldDelay + threshold && dXFade st == Nothing
+          then (oldDelay, Just (crossfadeDuration, crossfadeDuration, computeOutput st oldDelay))
+          else (desiredDelay, dXFade st)
+      -- Use baseDelay as the effective delay for computing the new output.
+      effectiveDelay = baseDelay
+      intDelay = floor effectiveDelay
+      frac = effectiveDelay - fromIntegral intDelay
+      readIdx = (writeIdx - intDelay + len) `mod` len
+      nextIdx = (readIdx + 1) `mod` len
+  y0 <- MV.read buf readIdx
+  y1 <- MV.read buf nextIdx
+  let interpOut = if frac == 0 then y0 else lerp frac y0 y1
+  -- If we're in a crossfade transition, blend the old output with the new one.
+  (finalOut, newXfade) <- case xfade of
+    Nothing -> return (interpOut, Nothing)
+    Just (remSamples, total, oldOut) -> do
+      let t = 1 - (fromIntegral remSamples / fromIntegral total)
+          blended = lerp t oldOut interpOut
+          newRem = remSamples - 1
+          xfade' = if newRem <= 0 then Nothing else Just (newRem, total, oldOut)
+      return (blended, xfade')
+  let y = finalOut
+      newVal = ( fst x + fbGain * fst y
+               , snd x + fbGain * snd y )
+  MV.write buf writeIdx newVal
+  let newWriteIdx = (writeIdx + 1) `mod` len
+      -- Once the crossfade is complete, update the effective delay to the new desired value.
+      newEffectiveDelay = case newXfade of
+                            Nothing -> desiredDelay
+                            Just _  -> oldDelay
+  return (y, st { dIdx = newWriteIdx, dDelay = newEffectiveDelay, dXFade = newXfade })
+{-# NOINLINE processFdbkDelayVarInterpCrossFade #-}
+
+-- Signal function that uses the above process function.
+fdbkDelayVarInterpCrossFade :: Int              -- Maximum buffer length
+                            -> CV Float         -- Feedback gain control
+                            -> CV Float         -- Delay time control (in ms)
+                            -> SF (Control, Sample) (Control, Sample)
+fdbkDelayVarInterpCrossFade maxDelay fbGain delayTime = unsafePerformIO $ do
+  buf <- MV.new maxDelay
+  MV.set buf (0,0)
+  -- Initialize the effective delay; you might start with 0 or a value computed from the initial delayTime.
+  let initDelayState = Delay { dBuf = buf, dIdx = 0, dDelay = 0, dXFade = Nothing }
+  return (sfCrossFade initDelayState)
+  where
+    sfCrossFade st = SF $ \(c, s) ->
+      let dt = delayTime c               -- desired delay time in ms
+          desiredDelaySamples = dt / 1000 * sampleRate  -- convert to fractional samples
+          (y, st') = processFdbkDelayVarInterpCrossFade st s desiredDelaySamples (fbGain c)
+      in ((c, y), sfCrossFade st')
+{-# NOINLINE fdbkDelayVarInterpCrossFade #-}

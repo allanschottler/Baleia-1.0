@@ -9,13 +9,12 @@ executable BaleiaTest
     src
   ghc-options:         -O2
   build-depends:       
-    base >= 4.15 && <= 5,
+    base,
     -- HUnit,
     syb, 
     template-haskell,
     hint,
     vector,
-    storablevector,
     storable-tuple,
     split,
     directory,
@@ -29,7 +28,7 @@ executable BaleiaTest
     Baleia.Sample,
     Baleia.Time,
     Baleia.Internal,
-    Baleia.Delay,
+    DeriveStorable,
     Control
   default-language:    Haskell2010
 
@@ -57,16 +56,15 @@ foreign-library Baleia
     Baleia.Sample,
     Baleia.Time,
     Baleia.Internal,
-    Baleia.Delay,
+    DeriveStorable,
     Start,
     Control
   build-depends:
-    base >= 4.15 && <= 5, 
+    base,
     syb, 
     template-haskell,
     hint,
     vector,
-    storablevector,
     storable-tuple,
     split,
     directory,

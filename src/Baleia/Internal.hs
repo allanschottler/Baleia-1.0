@@ -76,7 +76,7 @@ clip thrsh = arr $ \(c, (l,r)) -> (c, (clipi (thrsh c) l, clipi (thrsh c) r))
 {-# INLINE clip #-}
 
 mix :: CV Float -> SF ((Control, Sample), (Control, Sample)) (Control, Sample)
-mix gain = arr $ \((c1, (l1,r1)), (c2, (l2,r2))) -> (c1, (l1 * (1 - gain c1) + l2 * (gain c1), r1 * (1 - gain c1) + r2 * (gain c1)))
+mix gain = arr $ \((c1, (l1,r1)), (c2, (l2,r2))) -> (c1 {- mix out c1 c2 -}, (l1 * (1 - gain c1) + l2 * (gain c1), r1 * (1 - gain c1) + r2 * (gain c1)))
 {-# INLINE mix #-}
 
 switch :: CV Bool -> SF ((Control, Sample), (Control, Sample)) (Control, Sample)
@@ -135,91 +135,3 @@ fdbkDelay n fbGain = unsafePerformIO $ do
       let (y, st') = processFdbkDelay st s $ fbGain c
       in ((c, y), fdbkDelay' st')
 {-# NOINLINE fdbkDelay #-}
-
-sampleRate :: Float
-sampleRate = 44100
-
--- Duration (in samples) over which to crossfade on an upward delay jump.
-crossfadeDuration :: Int
-crossfadeDuration = 50
-
--- Helper: Linear interpolation between two samples.
-lerp :: Float -> Sample -> Sample -> Sample
-lerp t (a0, b0) (a1, b1) = ((1-t)*a0 + t*a1, (1-t)*b0 + t*b1)
-
--- Helper to compute an interpolated output from a specified delay value (without updating state).
-computeOutput :: Delay -> Float -> Sample
-computeOutput st delayVal = unsafePerformIO $ do
-  let buf    = dBuf st
-      len    = MV.length buf
-      writeIdx = dIdx st
-      intDelay = floor delayVal
-      frac     = delayVal - fromIntegral intDelay
-      readIdx  = (writeIdx - intDelay + len) `mod` len
-      nextIdx  = (readIdx + 1) `mod` len
-  y0 <- MV.read buf readIdx
-  y1 <- MV.read buf nextIdx
-  return $ if frac == 0 then y0 else lerp frac y0 y1
-
--- Main process function with crossfade handling for upward delay jumps.
-processFdbkDelayVarInterpCrossFade :: Delay -> Sample -> Float -> Float -> (Sample, Delay)
-processFdbkDelayVarInterpCrossFade st x desiredDelay fbGain = unsafePerformIO $ do
-  let buf       = dBuf st
-      len       = MV.length buf
-      writeIdx  = dIdx st
-      oldDelay  = dDelay st
-      -- A small threshold to detect an upward jump in delay.
-      threshold = 1.0
-      -- If an upward jump is detected and we're not already crossfading, initiate a crossfade.
-      (baseDelay, xfade) =
-        if desiredDelay > oldDelay + threshold && dXFade st == Nothing
-          then (oldDelay, Just (crossfadeDuration, crossfadeDuration, computeOutput st oldDelay))
-          else (desiredDelay, dXFade st)
-      -- Use baseDelay as the effective delay for computing the new output.
-      effectiveDelay = baseDelay
-      intDelay = floor effectiveDelay
-      frac = effectiveDelay - fromIntegral intDelay
-      readIdx = (writeIdx - intDelay + len) `mod` len
-      nextIdx = (readIdx + 1) `mod` len
-  y0 <- MV.read buf readIdx
-  y1 <- MV.read buf nextIdx
-  let interpOut = if frac == 0 then y0 else lerp frac y0 y1
-  -- If we're in a crossfade transition, blend the old output with the new one.
-  (finalOut, newXfade) <- case xfade of
-    Nothing -> return (interpOut, Nothing)
-    Just (remSamples, total, oldOut) -> do
-      let t = 1 - (fromIntegral remSamples / fromIntegral total)
-          blended = lerp t oldOut interpOut
-          newRem = remSamples - 1
-          xfade' = if newRem <= 0 then Nothing else Just (newRem, total, oldOut)
-      return (blended, xfade')
-  let y = finalOut
-      newVal = ( fst x + fbGain * fst y
-               , snd x + fbGain * snd y )
-  MV.write buf writeIdx newVal
-  let newWriteIdx = (writeIdx + 1) `mod` len
-      -- Once the crossfade is complete, update the effective delay to the new desired value.
-      newEffectiveDelay = case newXfade of
-                            Nothing -> desiredDelay
-                            Just _  -> oldDelay
-  return (y, st { dIdx = newWriteIdx, dDelay = newEffectiveDelay, dXFade = newXfade })
-{-# NOINLINE processFdbkDelayVarInterpCrossFade #-}
-
--- Signal function that uses the above process function.
-fdbkDelayVarInterpCrossFade :: Int              -- Maximum buffer length
-                            -> CV Float         -- Feedback gain control
-                            -> CV Float         -- Delay time control (in ms)
-                            -> SF (Control, Sample) (Control, Sample)
-fdbkDelayVarInterpCrossFade maxDelay fbGain delayTime = unsafePerformIO $ do
-  buf <- MV.new maxDelay
-  MV.set buf (0,0)
-  -- Initialize the effective delay; you might start with 0 or a value computed from the initial delayTime.
-  let initDelayState = Delay { dBuf = buf, dIdx = 0, dDelay = 0, dXFade = Nothing }
-  return (sfCrossFade initDelayState)
-  where
-    sfCrossFade st = SF $ \(c, s) ->
-      let dt = delayTime c               -- desired delay time in ms
-          desiredDelaySamples = dt / 1000 * sampleRate  -- convert to fractional samples
-          (y, st') = processFdbkDelayVarInterpCrossFade st s desiredDelaySamples (fbGain c)
-      in ((c, y), sfCrossFade st')
-{-# NOINLINE fdbkDelayVarInterpCrossFade #-}

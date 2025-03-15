@@ -5,6 +5,7 @@
 {-# LANGUAGE ImplicitParams #-}
 module Start where
 
+import Control.Exception (try, SomeException)
 import Foreign
 import Foreign.C.Types
 import Foreign.C.String
@@ -13,7 +14,6 @@ import Foreign.StablePtr
 import Data.List.Split
 import Foreign.Storable.Tuple
 import qualified Data.Vector.Storable as V
--- (No need for Data.Vector as a separate import now)
 import Baleia.Sample    -- For stereo/sample helpers
 import Baleia.Meta      -- Provides Control, initControl, etc.
 import Baleia.Time
@@ -22,7 +22,28 @@ import Control.Arrow hiding (left, right)
 import Prelude hiding (length)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import System.IO.Unsafe
+import Language.Haskell.Interpreter
+import Language.Haskell.Interpreter.Unsafe
+import Control.Monad.IO.Class (liftIO)
+import System.IO (appendFile)
+import System.Directory (createDirectoryIfMissing)
+import Control.Exception ( bracket )
+import System.IO ( hPutStrLn, stderr )
+import System.Plugins.DynamicLoader
+
 import Control
+
+--------------------------------------------------------------------------------
+-- Debug Logging (to file), creating the directory first
+--------------------------------------------------------------------------------
+
+logPath :: FilePath
+logPath = "C:\\temp\\mydll.log"
+
+debugLog :: String -> IO ()
+debugLog s = do
+  createDirectoryIfMissing True "C:\\temp"
+  appendFile logPath (s ++ "\n")
 
 --------------------------------------------------------------------------------
 -- Control Introspection and Conversion
@@ -32,8 +53,6 @@ deriveStorable ''Control
 
 ctrlFields' = $(introspect ''Control)
 
--- pairEvery: Convert a list of Strings (control metadata) into a
--- V.Vector of (CString, CString)
 {-# NOINLINE pairEvery #-}
 pairEvery :: [String] -> V.Vector (CString, CString)
 pairEvery xs = unsafePerformIO $ do
@@ -51,23 +70,16 @@ pairEvery xs = unsafePerformIO $ do
 ctrlFields :: V.Vector (CString, CString)
 ctrlFields = pairEvery $ split (dropBlanks . dropDelims $ oneOf "()[],\"") ctrlFields'
 
--- Import for C's strcmp
 foreign import ccall unsafe "string.h strcmp" c_strcmp :: CString -> CString -> CInt
 
 {-# NOINLINE boolStr #-}
 boolStr :: CString
 boolStr = unsafePerformIO $ newCString "Bool"
 
--- Precompute control field info as a V.Vector pairing each field's name with
--- a flag indicating if its type is "Bool".  (This avoids repeatedly converting
--- the type field from a CString to a Haskell String.)
 {-# NOINLINE ctrlFieldsInfo #-}
 ctrlFieldsInfo :: V.Vector (CString, Bool)
 ctrlFieldsInfo = V.map (\(name, typeStr) -> (name, c_strcmp typeStr boolStr == 0)) ctrlFields
 
--- Convert a vector of Float control values into a Control.
--- We use an index-based fold over the storable vector (which contains the new float
--- values) and look up the corresponding (name, isBool) flag from ctrlFieldsInfo.
 raw2ctrl :: V.Vector Float -> Control
 raw2ctrl values = V.ifoldl' (\s i v ->
     let (nameCString, isBool) = ctrlFieldsInfo V.! i
@@ -75,7 +87,6 @@ raw2ctrl values = V.ifoldl' (\s i v ->
     in if isBool then setField name (v >= 0.5) s else setField name v s
   ) initControl values
 
--- poke2: an index-based loop for writing paired elements into two memory regions.
 poke2 :: (Storable a) => Ptr a -> Ptr a -> V.Vector (a, a) -> IO ()
 poke2 ptra ptrb vec = go 0
   where
@@ -88,35 +99,40 @@ poke2 ptra ptrb vec = go 0
              go (i + 1)
 
 --------------------------------------------------------------------------------
--- Main process
+-- Dynamic Loading of the Process Function
 --------------------------------------------------------------------------------
 
+
+-- | Load the MyModule plugin and retrieve the 'process' symbol.
+-- loadMyModuleProcess :: IO ProcessFunction
+-- loadMyModuleProcess = do
+--   mod <- loadModule "MyModule" (Just "D:\\Baleia-1.0\\dist-newstyle\\build\\x86_64-windows\\ghc-9.12.1\\Baleia-1.0\\f\\Baleia\\build\\Baleia\\Baleia-tmp") Nothing 
+--   processFun <- loadFunction mod "process" 
+--   return processFun
+
 process :: SF (Control, Sample) (Control, Sample)
-process = clip _Clip <<< amp _Gain <<< mix _DryWet <<< id_ &&& (fdbkDelay (3 beats `div` 4) _Fdbk1 <<< fdbkDelay (18 ms) _Fdbk2)
+process = 
+  let m1 = lgr 60 18000 _Freq
+      m2 = lgr 1 60 _Time
+  in amp (liftCV _Gain) <<< mix _DryWet <<< id_ &&& amp (lfoSin m2) <<< oscSaw m1
 {-# INLINE process #-}
 
 --------------------------------------------------------------------------------
--- FFI Exports: startCtx and freeCtx using an IORef for state updates
+-- FFI Exports
 --------------------------------------------------------------------------------
 
-type DSPState = SF (Control, Sample) (Control, Sample)
-type DSPStateRef = IORef DSPState
+type DSPState = IORef (SF (Control, Sample) (Control, Sample))
 
-foreign export ccall startCtx :: IO (StablePtr DSPStateRef)
-startCtx :: IO (StablePtr DSPStateRef)
-startCtx = newStablePtr =<< newIORef process
+foreign export ccall startCtx :: IO (StablePtr DSPState)
+startCtx :: IO (StablePtr DSPState)
+startCtx = newStablePtr =<< newIORef process 
 
-foreign export ccall freeCtx :: StablePtr DSPStateRef -> IO ()
-freeCtx :: StablePtr DSPStateRef -> IO ()
+foreign export ccall freeCtx :: StablePtr DSPState -> IO ()
+freeCtx :: StablePtr DSPState -> IO ()
 freeCtx = freeStablePtr
 
---------------------------------------------------------------------------------
--- FFI Export: main2 using IORef state update
---------------------------------------------------------------------------------
-
-foreign export ccall main2 :: StablePtr DSPStateRef -> Int -> Int ->
-                              Ptr Float -> Ptr Float ->
-                              Ptr Float -> Ptr Float ->
+foreign export ccall main2 :: StablePtr DSPState -> Int -> Int ->
+                              Ptr Float -> Ptr Float -> Ptr Float -> Ptr Float ->
                               Ptr Float -> Ptr Float -> IO ()
 main2 dspPtr ns np ci _co il ir ol or = do
   ref <- deRefStablePtr dspPtr
@@ -134,9 +150,6 @@ main2 dspPtr ns np ci _co il ir ol or = do
   poke2 ol or $ V.zipWith (,) leftOut rightOut
   writeIORef ref sfNext
 
--- FFI Export: controlInMeta now uses ctrlFieldsInfo.
--- It constructs a string that, for each control field, shows its name, its type
--- (determined from the Bool flag), and its current value in initControl.
 foreign export ccall controlInMeta :: IO CString
 controlInMeta :: IO CString
 controlInMeta = newCString (go 0)

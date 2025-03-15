@@ -2,47 +2,49 @@ cabal-version: 3.12
 name:     Baleia
 version: 1.0
 
--- executable BaleiaTest
---   main-is:             Test.hs
---   hs-source-dirs:      
---     -- test,
---     src
---   ghc-options:         -O2
---   build-depends:       
---     base,
---     -- HUnit,
---     syb, 
---     template-haskell,
---     hint,
---     vector,
---     storable-tuple,
---     split,
---     directory,
---     text,
---     array,
---     containers
---   other-modules:
---     Baleia,
---     Baleia.Math,
---     Baleia.Meta,
---     Baleia.Sample,
---     Baleia.Time,
---     Baleia.Internal,
---     Control
---   default-language:    Haskell2010
+executable BaleiaTest
+  main-is:             Test.hs
+  hs-source-dirs:      
+    -- test,
+    src
+  ghc-options:         -O3 -fPIC
+  build-depends:       
+    base,
+    -- HUnit,
+    syb, 
+    template-haskell,
+    hint,
+    vector,
+    storable-tuple,
+    split,
+    directory,
+    text,
+    array,
+    containers,
+    dynamic-loader
+  other-modules:
+    Baleia,
+    Baleia.Math,
+    Baleia.Meta,
+    Baleia.Sample,
+    Baleia.Time,
+    Baleia.Internal,
+    Control,
+    MyModule
+  default-language:    Haskell2010
 
 foreign-library Baleia
   type:                
     native-shared
   ghc-options:
+    -- -shared
     -O3
     -fPIC
+    -optl-Wl,--exclude-all-symbols
   if os(windows) {
     options: standalone
     mod-def-file: Baleia.def  
   }
-  -- extra-libraries-static: 
-  --   HSrts
   other-extensions:
     TemplateHaskell
   install-includes:    
@@ -55,7 +57,8 @@ foreign-library Baleia
     Baleia.Time,
     Baleia.Internal,
     Start,
-    Control
+    Control,
+    MyModule
   build-depends:
     base,
     syb, 
@@ -67,7 +70,8 @@ foreign-library Baleia
     directory,
     text,
     array,
-    containers
+    containers,
+    dynamic-loader
   hs-source-dirs:      
     src
   c-sources:           

@@ -71,5 +71,73 @@ module Main where
 --     printResult (n, Nothing)  = putStrLn $ "Test " ++ show n ++ ": PASSED"
 --     printResult (n, Just a) = putStrLn $ "Test " ++ show n ++ ": FAILED => " ++ show a
 
+import Control.Exception (try, SomeException)
+import Foreign
+import Foreign.C.Types
+import Foreign.C.String
+import Foreign.Marshal.Array
+import Foreign.StablePtr
+import Data.List.Split
+import Foreign.Storable.Tuple
+import qualified Data.Vector.Storable as V
+import Baleia.Sample    -- For stereo/sample helpers
+import Baleia.Meta      -- Provides Control, initControl, etc.
+import Baleia.Time
+import Baleia.Internal
+import Control.Arrow hiding (left, right)
+import Prelude hiding (length)
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
+import System.IO.Unsafe
+import Control
+import Language.Haskell.Interpreter
+import Language.Haskell.Interpreter.Unsafe
+import Control.Monad.IO.Class (liftIO)
+import System.IO (appendFile)
+import System.Directory (createDirectoryIfMissing, doesFileExist)
+import System.Plugins.DynamicLoader
+
+-- logPath :: FilePath
+-- logPath = "C:\\temp\\mydll.log"
+
+-- debugLog :: String -> IO ()
+-- debugLog s = do
+--   createDirectoryIfMissing True "C:\\temp"
+--   appendFile logPath (s ++ "\n")
+
+-- loadProcess :: IO (SF (Control, Sample) (Control, Sample))
+-- loadProcess = do
+--   debugLog "Starting dynamic load of MyModule..."
+--   eResult <- try $ runInterpreter $ do
+--       set [ searchPath := ["D:\\Baleia-1.0\\src", "D:\\Baleia-1.0\\src\\Baleia"] ]
+--       liftIO (debugLog "Search path set to D:\\Baleia-1.0\\src, D:\\Baleia-1.0\\src\\Baleia.")
+--       unsafeSetGhcOption  "-package template-haskell"
+--       unsafeSetGhcOption  "-package syb"
+--       unsafeSetGhcOption  "-package storable-tuple"
+--       loadModules ["D:\\Baleia-1.0\\src\\MyModule.hs"]
+--       liftIO (debugLog "Module MyModule.hs loaded.")
+--       setTopLevelModules ["MyModule"]
+--       liftIO (debugLog "Top-level module set to MyModule.")
+--       interpret "process" (as :: SF (Control, Sample) (Control, Sample))
+--     :: IO (Either SomeException (Either InterpreterError (SF (Control, Sample) (Control, Sample))))
+--   case eResult of
+--       Left ex -> do
+--           debugLog ("Interpreter exception: " ++ show ex)
+--           error $ "Dynamic load failed: " ++ show ex
+--       Right (Left err) -> do
+--           debugLog ("Interpreter error: " ++ show err)
+--           error $ "Dynamic load failed: " ++ show err
+--       Right (Right proc) -> do
+--           debugLog "Process function loaded successfully."
+--           return proc
+
+loadMyModuleProcess :: IO (SF (Control, Sample) (Control, Sample))
+loadMyModuleProcess = do
+  mod <- loadModuleFromPath "D:\\Baleia-1.0\\dist-newstyle\\build\\x86_64-windows\\ghc-9.12.1\\Baleia-1.0\\x\\BaleiaTest\\build\\BaleiaTest\\BaleiaTest-tmp\\MyModule.o" (Just "D:\\Baleia-1.0\\dist-newstyle\\build\\x86_64-windows\\ghc-9.12.1\\Baleia-1.0\\x\\BaleiaTest\\build\\BaleiaTest\\BaleiaTest-tmp\\") 
+  resolveFunctions
+  processFun <- loadFunction mod "process" 
+  return processFun
+
 main :: IO ()
-main = putStrLn "Hello test!"
+main = do
+  sf <- loadMyModuleProcess
+  putStrLn "Successfully loaded MyModule process in an EXE"

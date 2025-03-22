@@ -110,31 +110,6 @@ poke2 ptra ptrb vec = go 0
 --   processFun <- loadFunction mod "process" 
 --   return processFun
 
--- extract :: SF (Control, (Float, Sample)) Float
--- extract = arr (\(c, (v, _)) -> v)
-
-
--- minSF :: SF (Control, Sample) Float
--- minSF = cv ((\s -> 60 + 480*s)._Freq) >>> extract
-
--- maxSF :: SF (Control, Sample) Float
--- maxSF = cv ((\s -> 240 + 960*s)._Gain) >>> extract
-
--- modSF :: SF (Control, Sample) Float
--- modSF = cv ((\s -> 2 + 58*s)._Time) >>> lfoSqr >>> extract
-
--- m :: SF (Control, Sample) (Control, (Float, Sample))
--- m = proc (c, s) -> do
---     minVal <- minSF -< (c, s)
---     maxVal <- maxSF -< (c, s)
---     f      <- modSF -< (c, s)
---     o      <- second oscSin -< (f, s)
---     i    <- lin'' -< (minVal, maxVal, f, s)
---     out <- amp -< (i, o)
---     returnA -< (c, (out, s))
-
--- lerp a b t = a + (b - a) * t
-
 process :: SF (Control, Sample) (Control, Sample)
 process = proc (c, _) -> do
     minVal   <- lgr       -< (60,  8000, _Freq1 c)
@@ -143,7 +118,6 @@ process = proc (c, _) -> do
     l        <- lfoSin    -< lfoSpeed
     f        <- lgr       -< (minVal, maxVal, l)
     o        <- oscSin    -< f
-    -- n        <- oscWNoise -< ()
     a        <- amp       -< (_Gain c, o)
     d        <- fdbkDelay (3 beats `div` 4) -< (_Fdbk1 c, a)
     x        <- lin       -< (a, d, _DryWet c)

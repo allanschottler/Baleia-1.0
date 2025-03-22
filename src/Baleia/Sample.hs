@@ -17,5 +17,5 @@ instance Fractional (Float, Float) where
   recip (a, b)        = (recip a, recip b)
   fromRational r      = (fromRational r, fromRational r)
   
-mono :: Float -> Sample
-mono x = (x, x)
+monos :: Float -> Sample
+monos x = (x, x)

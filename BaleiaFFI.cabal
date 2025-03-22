@@ -11,6 +11,7 @@ executable BaleiaTest
   build-depends:       
     base,
     -- HUnit,
+    hspec,
     syb, 
     template-haskell,
     hint,
@@ -21,7 +22,7 @@ executable BaleiaTest
     text,
     array,
     containers,
-    dynamic-loader
+    -- dynamic-loader
   other-modules:
     Baleia,
     Baleia.Math,
@@ -38,7 +39,6 @@ foreign-library Baleia
     native-shared
   ghc-options:
     -- -shared
-    -O3
     -fPIC
     -optl-Wl,--exclude-all-symbols
   if os(windows) {
@@ -71,7 +71,7 @@ foreign-library Baleia
     text,
     array,
     containers,
-    dynamic-loader
+    -- dynamic-loader,
   hs-source-dirs:      
     src
   c-sources:           

@@ -3,6 +3,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE ImplicitParams #-}
+{-# LANGUAGE Arrows #-}
 module Start where
 
 import Control.Exception (try, SomeException)
@@ -29,7 +30,6 @@ import System.IO (appendFile)
 import System.Directory (createDirectoryIfMissing)
 import Control.Exception ( bracket )
 import System.IO ( hPutStrLn, stderr )
-import System.Plugins.DynamicLoader
 
 import Control
 
@@ -110,12 +110,47 @@ poke2 ptra ptrb vec = go 0
 --   processFun <- loadFunction mod "process" 
 --   return processFun
 
+-- extract :: SF (Control, (Float, Sample)) Float
+-- extract = arr (\(c, (v, _)) -> v)
+
+
+-- minSF :: SF (Control, Sample) Float
+-- minSF = cv ((\s -> 60 + 480*s)._Freq) >>> extract
+
+-- maxSF :: SF (Control, Sample) Float
+-- maxSF = cv ((\s -> 240 + 960*s)._Gain) >>> extract
+
+-- modSF :: SF (Control, Sample) Float
+-- modSF = cv ((\s -> 2 + 58*s)._Time) >>> lfoSqr >>> extract
+
+-- m :: SF (Control, Sample) (Control, (Float, Sample))
+-- m = proc (c, s) -> do
+--     minVal <- minSF -< (c, s)
+--     maxVal <- maxSF -< (c, s)
+--     f      <- modSF -< (c, s)
+--     o      <- second oscSin -< (f, s)
+--     i    <- lin'' -< (minVal, maxVal, f, s)
+--     out <- amp -< (i, o)
+--     returnA -< (c, (out, s))
+
+-- lerp a b t = a + (b - a) * t
+
 process :: SF (Control, Sample) (Control, Sample)
-process = 
-  let m1 = lgr 60 18000 _Freq
-      m2 = lgr 1 60 _Time
-  in amp (liftCV _Gain) <<< mix _DryWet <<< id_ &&& amp (lfoSin m2) <<< oscSaw m1
+process = proc (c, _) -> do
+    minVal   <- lgr       -< (60,  8000, _Freq1 c)
+    maxVal   <- lgr       -< (60,  8000, _Freq2 c)
+    lfoSpeed <- lgr       -< (0.1, 20,   _Time c)
+    l        <- lfoSin    -< lfoSpeed
+    f        <- lgr       -< (minVal, maxVal, l)
+    o        <- oscSin    -< f
+    -- n        <- oscWNoise -< ()
+    a        <- amp       -< (_Gain c, o)
+    d        <- fdbkDelay (3 beats `div` 4) -< (_Fdbk1 c, a)
+    x        <- lin       -< (a, d, _DryWet c)
+    m        <- mono      -< x
+    returnA  -< (c, m)
 {-# INLINE process #-}
+
 
 --------------------------------------------------------------------------------
 -- FFI Exports
@@ -144,7 +179,7 @@ main2 dspPtr ns np ci _co il ir ol or = do
   let leftIn   = V.unsafeFromForeignPtr0 lptr ns
       rightIn  = V.unsafeFromForeignPtr0 rptr ns
       stereoIn = V.zipWith (,) leftIn rightIn
-      (stereoOut, sfNext) = processBlock oldSF $ V.zipWith (,) (V.replicate ns newCtrl) stereoIn
+      (stereoOut, sfNext) = processBlock oldSF newCtrl stereoIn
       leftOut  = V.map (fst . snd) stereoOut
       rightOut = V.map (snd . snd) stereoOut
   poke2 ol or $ V.zipWith (,) leftOut rightOut

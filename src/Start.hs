@@ -15,8 +15,8 @@ import Foreign.StablePtr
 import Data.List.Split
 import Foreign.Storable.Tuple
 import qualified Data.Vector.Storable as V
-import Baleia.Sample    -- For stereo/sample helpers
-import Baleia.Meta      -- Provides Control, initControl, etc.
+import Baleia.Sample
+import Baleia.Meta
 import Baleia.Time
 import Baleia.Internal
 import Control.Arrow hiding (left, right)
@@ -30,20 +30,19 @@ import System.IO (appendFile)
 import System.Directory (createDirectoryIfMissing)
 import Control.Exception ( bracket )
 import System.IO ( hPutStrLn, stderr )
-
-import Control
+import MyModule as MM
 
 --------------------------------------------------------------------------------
 -- Debug Logging (to file), creating the directory first
 --------------------------------------------------------------------------------
 
-logPath :: FilePath
-logPath = "C:\\temp\\mydll.log"
+-- logPath :: FilePath
+-- logPath = "C:\\temp\\mydll.log"
 
-debugLog :: String -> IO ()
-debugLog s = do
-  createDirectoryIfMissing True "C:\\temp"
-  appendFile logPath (s ++ "\n")
+-- debugLog :: String -> IO ()
+-- debugLog s = do
+--   createDirectoryIfMissing True "C:\\temp"
+--   appendFile logPath (s ++ "\n")
 
 --------------------------------------------------------------------------------
 -- Control Introspection and Conversion
@@ -61,7 +60,7 @@ pairEvery xs = unsafePerformIO $ do
   where
     go (x:y:xs) = do
       xst <- newCString x
-      yst <- newCString y
+      yst <- newCString (take 1 y)
       rest <- go xs
       return $ (xst, yst) : rest
     go [] = return []
@@ -74,7 +73,7 @@ foreign import ccall unsafe "string.h strcmp" c_strcmp :: CString -> CString -> 
 
 {-# NOINLINE boolStr #-}
 boolStr :: CString
-boolStr = unsafePerformIO $ newCString "Bool"
+boolStr = unsafePerformIO $ newCString "B"
 
 {-# NOINLINE ctrlFieldsInfo #-}
 ctrlFieldsInfo :: V.Vector (CString, Bool)
@@ -85,7 +84,8 @@ raw2ctrl values = V.ifoldl' (\s i v ->
     let (nameCString, isBool) = ctrlFieldsInfo V.! i
         name = unsafePerformIO (peekCString nameCString)
     in if isBool then setField name (v >= 0.5) s else setField name v s
-  ) initControl values
+  ) MM.initControl values
+{-# INLINE raw2ctrl #-}
 
 poke2 :: (Storable a) => Ptr a -> Ptr a -> V.Vector (a, a) -> IO ()
 poke2 ptra ptrb vec = go 0
@@ -97,34 +97,7 @@ poke2 ptra ptrb vec = go 0
              pokeElemOff ptra i a
              pokeElemOff ptrb i b
              go (i + 1)
-
---------------------------------------------------------------------------------
--- Dynamic Loading of the Process Function
---------------------------------------------------------------------------------
-
-
--- | Load the MyModule plugin and retrieve the 'process' symbol.
--- loadMyModuleProcess :: IO ProcessFunction
--- loadMyModuleProcess = do
---   mod <- loadModule "MyModule" (Just "D:\\Baleia-1.0\\dist-newstyle\\build\\x86_64-windows\\ghc-9.12.1\\Baleia-1.0\\f\\Baleia\\build\\Baleia\\Baleia-tmp") Nothing 
---   processFun <- loadFunction mod "process" 
---   return processFun
-
-process :: SF (Control, Sample) (Control, Sample)
-process = proc (c, _) -> do
-    minVal   <- lgr       -< (60,  8000, _Freq1 c)
-    maxVal   <- lgr       -< (60,  8000, _Freq2 c)
-    lfoSpeed <- lgr       -< (0.1, 20,   _Time c)
-    l        <- lfoSin    -< lfoSpeed
-    f        <- lgr       -< (minVal, maxVal, l)
-    o        <- oscSin    -< f
-    a        <- amp       -< (_Gain c, o)
-    d        <- fdbkDelay (3 beats `div` 4) -< (_Fdbk1 c, a)
-    x        <- lin       -< (a, d, _DryWet c)
-    m        <- mono      -< x
-    returnA  -< (c, m)
-{-# INLINE process #-}
-
+{-# INLINE poke2 #-}
 
 --------------------------------------------------------------------------------
 -- FFI Exports
@@ -134,7 +107,7 @@ type DSPState = IORef (SF (Control, Sample) (Control, Sample))
 
 foreign export ccall startCtx :: IO (StablePtr DSPState)
 startCtx :: IO (StablePtr DSPState)
-startCtx = newStablePtr =<< newIORef process 
+startCtx = newStablePtr =<< newIORef MM.process 
 
 foreign export ccall freeCtx :: StablePtr DSPState -> IO ()
 freeCtx :: StablePtr DSPState -> IO ()
@@ -171,6 +144,6 @@ controlInMeta = newCString (go 0)
               name = unsafePerformIO (peekCString nameCString)
               typeStr = if isBool then "Bool" else "Float"
               pStr = if isBool
-                        then show (getField name initControl :: Bool)
-                        else show (getField name initControl :: Float)
+                        then show (getField name MM.initControl :: Bool)
+                        else show (getField name MM.initControl :: Float)
           in name ++ " " ++ typeStr ++ " " ++ pStr ++ " " ++ go (i + 1)

@@ -2,37 +2,37 @@ cabal-version: 3.12
 name:     Baleia
 version: 1.0
 
-executable BaleiaTest
-  main-is:             Test.hs
-  hs-source-dirs:      
-    -- test,
-    src
-  ghc-options:         -O3 -fPIC
-  build-depends:       
-    base,
-    -- HUnit,
-    hspec,
-    syb, 
-    template-haskell,
-    hint,
-    vector,
-    storable-tuple,
-    split,
-    directory,
-    text,
-    array,
-    containers,
-    -- dynamic-loader
-  other-modules:
-    Baleia,
-    Baleia.Math,
-    Baleia.Meta,
-    Baleia.Sample,
-    Baleia.Time,
-    Baleia.Internal,
-    Control,
-    MyModule
-  default-language:    Haskell2010
+-- executable BaleiaTest
+--   main-is:             Test.hs
+--   hs-source-dirs:      
+--     -- test,
+--     src
+--   ghc-options:         -O3 -fPIC
+--   build-depends:       
+--     base,
+--     -- HUnit,
+--     hspec,
+--     syb, 
+--     template-haskell,
+--     hint,
+--     vector,
+--     storable-tuple,
+--     split,
+--     directory,
+--     text,
+--     array,
+--     containers,
+--     -- dynamic-loader
+--   other-modules:
+--     Baleia,
+--     Baleia.Math,
+--     Baleia.Meta,
+--     Baleia.Sample,
+--     Baleia.Time,
+--     Baleia.Internal,
+--     -- Control,
+--     MyModule
+--   default-language:    Haskell2010
 
 foreign-library Baleia
   type:                
@@ -57,7 +57,7 @@ foreign-library Baleia
     Baleia.Time,
     Baleia.Internal,
     Start,
-    Control,
+    -- Control,
     MyModule
   build-depends:
     base,

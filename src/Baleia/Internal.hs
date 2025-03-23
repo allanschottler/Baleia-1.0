@@ -21,7 +21,6 @@ import Unsafe.Coerce
 import Baleia.Meta
 import Baleia.Math
 import Baleia.Sample
-import Control
 
 --------------------------------------------------------------------------------
 -- SF Abstraction
@@ -58,63 +57,6 @@ instance Arrow SF where
         (c, sf2) = g a
     in ((b,c), sf1 &&& sf2)
   {-# INLINE (&&&) #-}
-
--- type CV a = (Control -> a)
-
--- type SYSignal = SF Control (Control, Sample)
--- type Signal = SF (Control, Sample) (Control, Sample)
--- type CVSignal a = SF (Control, a) (Control, a)
-
--- type CV2 a = SF Control a
--- data CV a = Static a | Dynamic (Control -> a)
-
--- mapSF :: Arrow arr => (b -> c) -> arr a b -> arr a c
--- mapSF f a = arr f <<< a
--- {-# INLINE mapSF #-}
-
--- map2SF :: Arrow arr => ((b, c) -> d) -> arr a b -> arr a c -> arr a d
--- map2SF f a b = arr f <<< a &&& b
--- {-# INLINE map2SF #-}
-
--- map3SF :: Arrow arr => ((b, c, d) -> e) -> arr a b -> arr a c -> arr a d -> arr a e
--- map3SF f a b c = arr (\((x, y), z) -> f (x, y, z)) <<< ((a &&& b) &&& c)
--- {-# INLINE map3SF #-}
-
-
--- id_ :: SF a a
--- id_ = arr id
--- {-# INLINE id_ #-}
-
--- id2_ :: SF ((Control, Sample), (Control, Sample)) ((Control, Sample), (Control, Sample))
--- id2_ = arr id
--- {-# INLINE id2_ #-}
-
--- const_ :: b -> SF a b
--- const_ b = arr $ const b
--- {-# INLINE const_ #-}
-
--- id2_ :: SF ((Control, Sample), (Control, Sample)) (Control, Sample)
--- id2_ = arr $ \a -> a
--- {-# INLINE id_ #-}
-
--- amp :: CV Float -> SF (Control, Sample) (Control, Sample)
--- amp gain = arr $ \(c, (l,r)) -> (c, (l * (gain c), r * (gain c)))
--- {-# INLINE amp #-}
-
--- liftCV :: CV Float -> SF (Control, Sample) (Control, (Float, Sample))
--- liftCV :: CV Float -> SF (Control, Sample) (Control, (Float, Sample))
--- liftCV f = arr (\(c, s) -> (c, (f c, s)))
--- {-# INLINE liftCV #-}
-
--- cv = liftCV
--- {-# INLINE cv #-}
-
--- vc = liftCV . const
--- {-# INLINE vc #-} 
-
--- amp :: SF (Control, Sample) (Control, Sample) -> SF (Control, Sample) (Control, Sample)
--- amp gain = map2SF (\((c, g), (_, s)) -> (c, g * s)) gain id_ 
--- {-# INLINE amp #-}
 
 lerp a b t = a + (b - a) * t
 
@@ -185,10 +127,6 @@ processFdbkDelay st x fbGain = unsafePerformIO $ do
   return (y, st { dIdx = newIdx })
 {-# NOINLINE processFdbkDelay #-}
 
---------------------------------------------------------------------------------
--- Feedback Delay
---------------------------------------------------------------------------------
-
 fdbkDelay :: Int -> SF (Float, Float) Float
 fdbkDelay n = unsafePerformIO $ do
   buf <- MV.new n
@@ -200,6 +138,29 @@ fdbkDelay n = unsafePerformIO $ do
       let (y, st') = processFdbkDelay st s fbGain
       in (y, fdbkDelay' st')
 {-# NOINLINE fdbkDelay #-}
+
+--------------------------------------------------------------------------------
+-- Filters
+--------------------------------------------------------------------------------
+
+-- | Lowpass Bi-Quad Filter.
+--   Processes a tuple (freq, q, sample) and outputs a filtered sample.
+--   Uses a fixed sample rate of 44100.
+lowpass :: SF (Float, Float, Float) Float
+lowpass = go 0 0 0 0
+  where
+    go x1 x2 y1 y2 = SF $ \(freq, q, s) ->
+      let w0 = 2 * pi * freq / 44100
+          alpha = sin w0 / (2 * q)
+          a0 = 1 + alpha
+          a1 = -2 * cos w0
+          a2 = 1 - alpha
+          b0 = (1 - cos w0) / 2
+          b1 = 1 - cos w0
+          b2 = (1 - cos w0) / 2
+          y = b0 * s + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2
+      in (y, go x1 y1 x2 y2)
+{-# INLINE lowpass #-}
 
 --------------------------------------------------------------------------------
 -- Oscillator
@@ -216,6 +177,10 @@ sqrWave = V.generate 1024 $ \i -> if i < 512 then 1 else -1
 sawWave :: V.Vector Float
 sawWave = V.generate 1024 $ \i -> 2 * fromIntegral i / 1023 - 1
 {-# NOINLINE sawWave #-}
+
+rampWave :: V.Vector Float
+rampWave = V.generate 1024 $ \i -> fromIntegral i / 1023
+{-# NOINLINE rampWave #-}
 
 triWave :: V.Vector Float
 triWave = V.generate 1024 $ \i -> 
@@ -251,6 +216,9 @@ oscTri = oscWavetable triWave
 {-# INLINE oscTri #-}
 oscSaw = oscWavetable sawWave
 {-# INLINE oscSaw #-}
+oscRamp = oscWavetable rampWave
+{-# INLINE oscRamp #-}
+
 lfoSin = unipol <<< oscWavetable sinWave
 {-# INLINE lfoSin #-}
 lfoSqr = unipol <<< oscWavetable sqrWave
@@ -259,6 +227,8 @@ lfoTri = unipol <<< oscWavetable triWave
 {-# INLINE lfoTri #-}
 lfoSaw = unipol <<< oscWavetable sawWave
 {-# INLINE lfoSaw #-}
+lfoRamp = unipol <<< oscWavetable rampWave
+{-# INLINE lfoRamp #-}
 
 oscWNoise :: SF () Float
 oscWNoise = go 22222

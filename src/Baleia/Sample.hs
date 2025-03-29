@@ -16,6 +16,15 @@ instance Fractional (Float, Float) where
   (a1, b1) / (a2, b2) = (a1 / a2, b1 / b2)
   recip (a, b)        = (recip a, recip b)
   fromRational r      = (fromRational r, fromRational r)
-  
-monos :: Float -> Sample
-monos x = (x, x)
+
+
+-- data Parameter = Parameter
+--   { _Name   :: String
+--   , _Value  :: Float
+--   , _Min    :: Float
+--   , _Max    :: Float
+--   } deriving (Eq, Show)
+
+-- data Parameter = In String Float Float Float
+--                | Out String Float Float Float
+-- deriving (Eq, Show)

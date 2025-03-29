@@ -33,18 +33,6 @@ import System.IO ( hPutStrLn, stderr )
 import MyModule as MM
 
 --------------------------------------------------------------------------------
--- Debug Logging (to file), creating the directory first
---------------------------------------------------------------------------------
-
--- logPath :: FilePath
--- logPath = "C:\\temp\\mydll.log"
-
--- debugLog :: String -> IO ()
--- debugLog s = do
---   createDirectoryIfMissing True "C:\\temp"
---   appendFile logPath (s ++ "\n")
-
---------------------------------------------------------------------------------
 -- Control Introspection and Conversion
 --------------------------------------------------------------------------------
 
@@ -87,49 +75,59 @@ raw2ctrl values = V.ifoldl' (\s i v ->
   ) MM.initControl values
 {-# INLINE raw2ctrl #-}
 
-poke2 :: (Storable a) => Ptr a -> Ptr a -> V.Vector (a, a) -> IO ()
-poke2 ptra ptrb vec = go 0
+ctrl2raw :: Control -> V.Vector Float
+ctrl2raw ctrl = V.generate (V.length ctrlFieldsInfo) $ \i ->
+  let (nameCString, isBool) = ctrlFieldsInfo V.! i
+      name = unsafePerformIO (peekCString nameCString)
+  in if isBool then if getField name ctrl then 1 else 0 else getField name ctrl
+{-# INLINE ctrl2raw #-}
+
+--------------------------------------------------------------------------------
+-- Block Processing
+--------------------------------------------------------------------------------
+
+processBlock sf ctrl vecIn ol or = go 0 sf (V.length vecIn) ctrl
   where
-    len = V.length vec
-    go i | i >= len = return ()
-         | otherwise = do
-             let (a, b) = vec V.! i
-             pokeElemOff ptra i a
-             pokeElemOff ptrb i b
-             go (i + 1)
-{-# INLINE poke2 #-}
+    go i currentSF n c
+      | i >= n    = return (c, currentSF)
+      | otherwise = do
+          let ((c', (l,r)), nextSF) = runSF currentSF (c, (vecIn V.! i))
+          pokeElemOff ol i l
+          pokeElemOff or i r
+          go (i + 1) nextSF n c'
+{-# INLINE processBlock #-}
 
 --------------------------------------------------------------------------------
 -- FFI Exports
 --------------------------------------------------------------------------------
 
-type DSPState = IORef (SF (Control, Sample) (Control, Sample))
+type Context = IORef (SF (Control, Sample) (Control, Sample))
 
-foreign export ccall startCtx :: IO (StablePtr DSPState)
-startCtx :: IO (StablePtr DSPState)
+foreign export ccall startCtx :: IO (StablePtr Context)
+startCtx :: IO (StablePtr Context)
 startCtx = newStablePtr =<< newIORef MM.process 
 
-foreign export ccall freeCtx :: StablePtr DSPState -> IO ()
-freeCtx :: StablePtr DSPState -> IO ()
+foreign export ccall freeCtx :: StablePtr Context -> IO ()
+freeCtx :: StablePtr Context -> IO ()
 freeCtx = freeStablePtr
 
-foreign export ccall main2 :: StablePtr DSPState -> Int -> Int ->
+foreign export ccall main2 :: StablePtr Context -> Int -> Int ->
                               Ptr Float -> Ptr Float -> Ptr Float -> Ptr Float ->
                               Ptr Float -> Ptr Float -> IO ()
-main2 dspPtr ns np ci _co il ir ol or = do
+main2 dspPtr ns np ci co il ir ol or = do
   ref <- deRefStablePtr dspPtr
   oldSF <- readIORef ref
   cptr <- newForeignPtr_ ci
   let newCtrl = raw2ctrl $ V.unsafeFromForeignPtr0 cptr np
   lptr <- newForeignPtr_ il
   rptr <- newForeignPtr_ ir
+  loptr <- newForeignPtr_ ol
+  roptr <- newForeignPtr_ or
   let leftIn   = V.unsafeFromForeignPtr0 lptr ns
       rightIn  = V.unsafeFromForeignPtr0 rptr ns
       stereoIn = V.zipWith (,) leftIn rightIn
-      (stereoOut, sfNext) = processBlock oldSF newCtrl stereoIn
-      leftOut  = V.map (fst . snd) stereoOut
-      rightOut = V.map (snd . snd) stereoOut
-  poke2 ol or $ V.zipWith (,) leftOut rightOut
+  (ctrlOut, sfNext) <- processBlock oldSF newCtrl stereoIn ol or
+  V.unsafeWith (ctrl2raw ctrlOut) $ \ptr' -> copyArray co ptr' np
   writeIORef ref sfNext
 
 foreign export ccall controlInMeta :: IO CString

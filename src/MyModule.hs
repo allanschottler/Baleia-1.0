@@ -2,6 +2,7 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 module MyModule where
 import Baleia
+import Baleia.Note as N
 
 data Control = Control
     { _Gain     :: Float
@@ -23,23 +24,9 @@ initControl = Control 0.1 0 0.5 0.45 0.45 0.5 0 1 0 0 0 0.5 0
 {-# NOINLINE initControl #-}
 
 process = proc (c, _) -> do
-    let minFreq  = logr 60 8000   $ _Freq1 c
-        maxFreq  = logr 60 8000   $ _Freq2 c
-        lfoSpeed = logr 0.1 20    $ _Time c
-        ff       = logr 60 22000  $ _Freq3 c
-        qq       = lerp 0.707 20  $ _Q c
-        pp       = bipol          $ _Pan c
-        tt       = lerp 200 44100 $ _Delay c
-    l <- oscSqr -< lfoSpeed
-    let f = logr minFreq maxFreq $ unipol l
-    o <- oscSaw -< f
-    pf <- lpf -< (ff, qq, o)
-    d <- fdbkDelayDyn -< (tt, _Fdbk c, pf) 
-    let x = lerp pf d $ _DryWet c
-        a = x * _Gain c
-        p = pan pp $ mono a
-        pk = if l > 0.9 then 1 else 0
-    returnA -< (c { _Peak = pk }, p)
+    l <- oscSqr -< N.a3
+    r <- oscSaw -< N.a2
+    returnA -< (c, mono $ (l + r)*0.5*_Gain c)
 {-# INLINE process #-}
 
 

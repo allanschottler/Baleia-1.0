@@ -55,6 +55,7 @@ foreign-library Baleia
     Baleia.Meta,
     Baleia.Sample,
     Baleia.Time,
+    Baleia.Note,
     Baleia.Internal,
     Start,
     -- Control,

@@ -105,22 +105,6 @@ pan p (l, r) = (l - p * r, r + p * l)
 {-# INLINE pan #-}
 
 --------------------------------------------------------------------------------
--- Block Processing
---------------------------------------------------------------------------------
-
--- processBlock sf ctrl vec =
---   let n = V.length vec
---       (ys, finalSF) = go 0 sf [] n ctrl
---   in (V.fromList (reverse ys), finalSF)
---   where
---     go i currentSF acc n c
---       | i >= n    = (acc, currentSF)
---       | otherwise =
---           let ((c', y), nextSF) = runSF currentSF (c, (vec V.! i))
---           in go (i + 1) nextSF ((c', y) : acc) n c'
--- {-# INLINE processBlock #-}
-
---------------------------------------------------------------------------------
 -- Delay
 --------------------------------------------------------------------------------
 

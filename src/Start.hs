@@ -57,29 +57,19 @@ pairEvery xs = unsafePerformIO $ do
 ctrlFields :: V.Vector (CString, CString)
 ctrlFields = pairEvery $ split (dropBlanks . dropDelims $ oneOf "()[],\"") ctrlFields'
 
-foreign import ccall unsafe "string.h strcmp" c_strcmp :: CString -> CString -> CInt
-
-{-# NOINLINE boolStr #-}
-boolStr :: CString
-boolStr = unsafePerformIO $ newCString "B"
-
-{-# NOINLINE ctrlFieldsInfo #-}
-ctrlFieldsInfo :: V.Vector (CString, Bool)
-ctrlFieldsInfo = V.map (\(name, typeStr) -> (name, c_strcmp typeStr boolStr == 0)) ctrlFields
-
 raw2ctrl :: V.Vector Float -> Control
 raw2ctrl values = V.ifoldl' (\s i v ->
-    let (nameCString, isBool) = ctrlFieldsInfo V.! i
+    let nameCString = fst $ ctrlFields V.! i
         name = unsafePerformIO (peekCString nameCString)
-    in if isBool then setField name (v >= 0.5) s else setField name v s
+    in setField name v s
   ) MM.initControl values
 {-# INLINE raw2ctrl #-}
 
 ctrl2raw :: Control -> V.Vector Float
-ctrl2raw ctrl = V.generate (V.length ctrlFieldsInfo) $ \i ->
-  let (nameCString, isBool) = ctrlFieldsInfo V.! i
+ctrl2raw ctrl = V.generate (V.length ctrlFields) $ \i ->
+  let nameCString = fst $ ctrlFields V.! i
       name = unsafePerformIO (peekCString nameCString)
-  in if isBool then if getField name ctrl then 1 else 0 else getField name ctrl
+  in getField name ctrl
 {-# INLINE ctrl2raw #-}
 
 --------------------------------------------------------------------------------
@@ -114,16 +104,14 @@ freeCtx = freeStablePtr
 foreign export ccall main2 :: StablePtr Context -> Int -> Int ->
                               Ptr Float -> Ptr Float -> Ptr Float -> Ptr Float ->
                               Ptr Float -> Ptr Float -> IO ()
-main2 dspPtr ns np ci co il ir ol or = do
-  ref <- deRefStablePtr dspPtr
+main2 ctx ns np ci co il ir ol or = do
+  ref <- deRefStablePtr ctx
   oldSF <- readIORef ref
   cptr <- newForeignPtr_ ci
-  let newCtrl = raw2ctrl $ V.unsafeFromForeignPtr0 cptr np
   lptr <- newForeignPtr_ il
   rptr <- newForeignPtr_ ir
-  loptr <- newForeignPtr_ ol
-  roptr <- newForeignPtr_ or
-  let leftIn   = V.unsafeFromForeignPtr0 lptr ns
+  let newCtrl = raw2ctrl $ V.unsafeFromForeignPtr0 cptr np
+      leftIn   = V.unsafeFromForeignPtr0 lptr ns
       rightIn  = V.unsafeFromForeignPtr0 rptr ns
       stereoIn = V.zipWith (,) leftIn rightIn
   (ctrlOut, sfNext) <- processBlock oldSF newCtrl stereoIn ol or
@@ -134,14 +122,11 @@ foreign export ccall controlInMeta :: IO CString
 controlInMeta :: IO CString
 controlInMeta = newCString (go 0)
   where
-    len = V.length ctrlFieldsInfo
+    len = V.length ctrlFields
     go i
       | i >= len  = ""
       | otherwise =
-          let (nameCString, isBool) = ctrlFieldsInfo V.! i
+          let nameCString = fst $ ctrlFields V.! i
               name = unsafePerformIO (peekCString nameCString)
-              typeStr = if isBool then "Bool" else "Float"
-              pStr = if isBool
-                        then show (getField name MM.initControl :: Bool)
-                        else show (getField name MM.initControl :: Float)
-          in name ++ " " ++ typeStr ++ " " ++ pStr ++ " " ++ go (i + 1)
+              pStr = show (getField name MM.initControl :: Float)
+          in name ++ " " ++ "NA" ++ " " ++ pStr ++ " " ++ go (i + 1)
